@@ -3,14 +3,113 @@ import 'package:flutter/material.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:translit/translit.dart';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'dart:io';
 
-Future<void> clearSharedPreferences() async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.clear();
+class StorageKeys {
+  static const fullName = 'fullName';
+  static const age = 'age';
+  static const sex = 'sex';
+  static const complaint = 'complaint';
+  static const legacyComplaint = 'comlpaint';
+  static const repeatTaps = 'repeatTaps';
+  static const timeToComplete = 'timeToComplete';
+
+  static const sessionKeys = [
+    fullName,
+    age,
+    sex,
+    complaint,
+    legacyComplaint,
+    repeatTaps,
+    timeToComplete,
+  ];
+}
+
+class SupabaseConfig {
+  static const metadataTable = 'user_meta';
+  static const gifBucket = 'gif_storage';
+}
+
+class ParticipantMetadata {
+  final String fullName;
+  final int? age;
+  final String? sex;
+  final String complaint;
+
+  const ParticipantMetadata({
+    required this.fullName,
+    required this.age,
+    required this.sex,
+    required this.complaint,
+  });
+
+  bool get isComplete =>
+      fullName.trim().isNotEmpty &&
+      age != null &&
+      age! > 0 &&
+      sex != null &&
+      sex!.isNotEmpty;
+
+  String get fileSafeName {
+    final normalized = fullName.trim().replaceAll(RegExp(r'\s+'), '_');
+    final transliterated = Translit().toTranslit(source: normalized);
+    final safe = transliterated.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    return safe.isEmpty ? 'NO_NAME' : safe;
+  }
+
+  Map<String, Object?> toSupabasePayload({
+    required String fileName,
+    required int? timeToComplete,
+    required int? repeatTaps,
+  }) {
+    return {
+      'fullName': fullName,
+      'age': age,
+      'sex': sex,
+      'filename': fileName,
+      'timeToComplete': timeToComplete,
+      'repeatTaps': repeatTaps,
+      'complaint': complaint,
+      'comment': '',
+    };
+  }
+
+  static Future<ParticipantMetadata> load() async {
+    final fullName = await StorageUtils.loadString(StorageKeys.fullName) ?? '';
+    final age = await StorageUtils.loadInt(StorageKeys.age);
+    final sex = await StorageUtils.loadString(StorageKeys.sex);
+    var complaint = await StorageUtils.loadString(StorageKeys.complaint);
+    final legacyComplaint = await StorageUtils.loadString(
+      StorageKeys.legacyComplaint,
+    );
+
+    if ((complaint == null || complaint.isEmpty) &&
+        legacyComplaint != null &&
+        legacyComplaint.isNotEmpty) {
+      complaint = legacyComplaint;
+      await StorageUtils.saveString(StorageKeys.complaint, legacyComplaint);
+      await StorageUtils.remove(StorageKeys.legacyComplaint);
+    }
+
+    return ParticipantMetadata(
+      fullName: fullName,
+      age: age,
+      sex: sex,
+      complaint: complaint ?? '',
+    );
+  }
+
+  Future<void> save() async {
+    await StorageUtils.saveString(StorageKeys.fullName, fullName.trim());
+    await StorageUtils.saveInt(StorageKeys.age, age!);
+    await StorageUtils.saveString(StorageKeys.sex, sex!);
+    await StorageUtils.saveString(StorageKeys.complaint, complaint.trim());
+    await StorageUtils.remove(StorageKeys.legacyComplaint);
+  }
 }
 
 class StorageUtils {
@@ -34,33 +133,55 @@ class StorageUtils {
     return prefs.getInt(key);
   }
 
+  static Future<void> remove(String key) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(key);
+  }
+
+  static Future<void> clearParticipantSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in StorageKeys.sessionKeys) {
+      await prefs.remove(key);
+    }
+  }
+
+  static String buildGifFileName({
+    required ParticipantMetadata metadata,
+    required String taskType,
+    DateTime? timestamp,
+  }) {
+    final time = timestamp ?? DateTime.now();
+    return '${metadata.fileSafeName}_${taskType}_${time.microsecondsSinceEpoch}.gif';
+  }
+
   static Future<bool> uploadGif(List<int> gifBytes, String fileName) async {
     final supabase = Supabase.instance.client;
     Uint8List uint8Gif = Uint8List.fromList(gifBytes);
 
-    final fullName = await loadString('fullName');
-    final age = await loadInt('age');
-    final sex = await loadString('sex');
-    final repeatTaps = await loadInt('repeatTaps');
-    final timeToComplete = await loadInt('timeToComplete');
-    final complaint = await loadString('comlpaint');
+    final metadata = await ParticipantMetadata.load();
+    final repeatTaps = await loadInt(StorageKeys.repeatTaps);
+    final timeToComplete = await loadInt(StorageKeys.timeToComplete);
+
+    if (!metadata.isComplete) {
+      if (kDebugMode) {
+        debugPrint('Upload blocked: participant metadata is incomplete.');
+      }
+      return false;
+    }
 
     try {
-      // upload meta to table
-      await supabase.from('user_meta').upsert({
-        'fullName': fullName,
-        'age': age,
-        'sex': sex,
-        'filename': fileName,
-        'timeToComplete': timeToComplete,
-        'repeatTaps': repeatTaps,
-        'complaint': complaint,
-        'comment': '',
-      });
+      await supabase
+          .from(SupabaseConfig.metadataTable)
+          .upsert(
+            metadata.toSupabasePayload(
+              fileName: fileName,
+              timeToComplete: timeToComplete,
+              repeatTaps: repeatTaps,
+            ),
+          );
 
-      // upload gif to bucket
       await supabase.storage
-          .from('gif_storage') // Supabase bucket name
+          .from(SupabaseConfig.gifBucket)
           .uploadBinary(fileName, uint8Gif);
 
       return true;
@@ -73,7 +194,7 @@ class StorageUtils {
   }
 
   static Future<List<String>> checkDownloadsDir() async {
-    final downloadsDir = await getDownloadsDirectory();
+    final downloadsDir = await _safeDownloadsDirectory();
 
     if (downloadsDir == null) {
       return [];
@@ -90,8 +211,44 @@ class StorageUtils {
     if (files.isEmpty) {
       return [];
     } else {
-      final List<String> paths = files.map((f) => f.path).toList();
+      final List<String> paths =
+          files
+              .whereType<File>()
+              .map((f) => f.path)
+              .where((path) => path.toLowerCase().endsWith('.gif'))
+              .toList();
       return paths;
+    }
+  }
+
+  static Future<bool> savePendingGif(
+    List<int> gifBytes,
+    String fileName,
+  ) async {
+    final directory = await _safeDownloadsDirectory();
+    if (directory == null) {
+      return false;
+    }
+
+    final file = File('${directory.path}/$fileName');
+    await file.writeAsBytes(gifBytes);
+    return true;
+  }
+
+  static Future<void> deletePendingFiles(List<String> paths) async {
+    for (final path in paths) {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
+  }
+
+  static Future<Directory?> _safeDownloadsDirectory() async {
+    try {
+      return await getDownloadsDirectory();
+    } on UnsupportedError {
+      return null;
     }
   }
 }
@@ -146,17 +303,13 @@ class Sketcher extends CustomPainter {
     // Draw all completed lines
     for (var line in lines) {
       for (int i = 0; i < line.points.length - 1; i++) {
-        if (line.points[i] != null && line.points[i + 1] != null) {
-          canvas.drawLine(line.points[i], line.points[i + 1], paint);
-        }
+        canvas.drawLine(line.points[i], line.points[i + 1], paint);
       }
     }
 
     // Draw current line in progress
     for (int i = 0; i < currentLine.length - 1; i++) {
-      if (currentLine[i] != null && currentLine[i + 1] != null) {
-        canvas.drawLine(currentLine[i], currentLine[i + 1], paint);
-      }
+      canvas.drawLine(currentLine[i], currentLine[i + 1], paint);
     }
   }
 

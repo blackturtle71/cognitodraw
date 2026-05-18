@@ -1,12 +1,10 @@
-import 'dart:ffi';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../utils/utils.dart';
-import '../constants/text_constants.dart';
 
-import 'dart:io';
-import 'dart:typed_data';
+import '../constants/text_constants.dart';
+import '../utils/utils.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -16,6 +14,31 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  int _sessionVersion = 0;
+  int _uploadVersion = 0;
+
+  Future<void> _resetParticipantSession({required bool deletePending}) async {
+    if (deletePending) {
+      final paths = await StorageUtils.checkDownloadsDir();
+      await StorageUtils.deletePendingFiles(paths);
+    }
+
+    await StorageUtils.clearParticipantSession();
+
+    if (!mounted) return;
+    setState(() {
+      _sessionVersion += 1;
+      _uploadVersion += 1;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Center(child: Text('Сессия нового участника начата')),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
@@ -29,92 +52,172 @@ class _HomePageState extends State<HomePage> {
       color: theme.colorScheme.onSurface,
       height: 1.5,
     );
-    return ListView.builder(
-      padding: EdgeInsets.all(16.0),
-      itemCount:
-          homePageCards.length +
-          3, // +1 for user guide, +1 for user input card, +1 for upload card
-      itemBuilder: (context, index) {
-        if (index == 0) {
-          return Column(
-            children: [
-              Card(
-                margin: EdgeInsets.all(8),
-                child: ListTile(
-                  title: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Text(
-                      'Руководство пользователя',
-                      style: titleStyle,
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                  subtitle: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Text(
-                      homeUserGuide,
-                      style: descriptionStyle,
-                      textAlign: TextAlign.start,
-                    ),
-                  ),
-                ),
-              ),
-              SizedBox(height: 10),
-            ],
-          );
-        }
-        if (index == 1) {
-          return Column(
-            children: [
-              InputCard(
-                titleStyle: titleStyle,
-                descriptionStyle: descriptionStyle,
-              ),
-              SizedBox(height: 10),
-            ],
-          );
-        }
-        if (index == 2) {
-          return Column(
-            children: [
-              UploadCard(titleStyle: titleStyle),
-              SizedBox(height: 10),
-            ],
-          );
-        }
-        final card =
-            homePageCards[index -
-                3]; // -3 to offset for user guide card, input card and upload card
-        return Column(
-          children: [
-            Card(
-              margin: EdgeInsets.all(8),
-              child: ListTile(
-                title: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Text(
-                    card.title,
-                    style: titleStyle,
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-                subtitle: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Text(
-                    card.description,
-                    style: descriptionStyle,
-                    textAlign: TextAlign.start,
-                  ),
-                ),
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Card(
+          margin: const EdgeInsets.all(8),
+          child: ListTile(
+            title: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(
+                'Руководство пользователя',
+                style: titleStyle,
+                textAlign: TextAlign.center,
               ),
             ),
-            SizedBox(height: 10),
-          ],
-        );
-      },
+            subtitle: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                homeUserGuide,
+                style: descriptionStyle,
+                textAlign: TextAlign.start,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        NewSessionCard(
+          titleStyle: titleStyle,
+          descriptionStyle: descriptionStyle,
+          onReset: _resetParticipantSession,
+        ),
+        const SizedBox(height: 10),
+        InputCard(
+          key: ValueKey(_sessionVersion),
+          titleStyle: titleStyle,
+          descriptionStyle: descriptionStyle,
+        ),
+        const SizedBox(height: 10),
+        UploadCard(key: ValueKey(_uploadVersion), titleStyle: titleStyle),
+      ],
     );
   }
 }
+
+class NewSessionCard extends StatefulWidget {
+  const NewSessionCard({
+    super.key,
+    required this.titleStyle,
+    required this.descriptionStyle,
+    required this.onReset,
+  });
+
+  final TextStyle titleStyle;
+  final TextStyle descriptionStyle;
+  final Future<void> Function({required bool deletePending}) onReset;
+
+  @override
+  State<NewSessionCard> createState() => _NewSessionCardState();
+}
+
+class _NewSessionCardState extends State<NewSessionCard> {
+  bool _resetting = false;
+
+  Future<void> _startNewSession() async {
+    final pendingPaths = await StorageUtils.checkDownloadsDir();
+    if (!mounted) return;
+
+    bool deletePending = false;
+
+    if (pendingPaths.isNotEmpty) {
+      final action = await showDialog<_PendingFileAction>(
+        context: context,
+        builder:
+            (context) => AlertDialog(
+              title: const Text('Есть несохранённые GIF-файлы'),
+              content: Text(
+                'Найдено локальных файлов: ${pendingPaths.length}. '
+                'Можно начать новую сессию и оставить их для ручной загрузки '
+                'или удалить их перед началом.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Отмена'),
+                ),
+                TextButton(
+                  onPressed:
+                      () =>
+                          Navigator.pop(context, _PendingFileAction.keepFiles),
+                  child: const Text('Оставить файлы'),
+                ),
+                FilledButton(
+                  onPressed:
+                      () => Navigator.pop(
+                        context,
+                        _PendingFileAction.deleteFiles,
+                      ),
+                  child: const Text('Удалить файлы'),
+                ),
+              ],
+            ),
+      );
+
+      if (action == null) {
+        return;
+      }
+
+      deletePending = action == _PendingFileAction.deleteFiles;
+    }
+
+    setState(() {
+      _resetting = true;
+    });
+
+    await widget.onReset(deletePending: deletePending);
+
+    if (!mounted) return;
+    setState(() {
+      _resetting = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.all(8),
+      child: ListTile(
+        title: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Text(
+            'Новая сессия участника',
+            style: widget.titleStyle,
+            textAlign: TextAlign.center,
+          ),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Text(
+                'Очистите данные текущего участника перед передачей устройства следующему человеку.',
+                style: widget.descriptionStyle,
+                textAlign: TextAlign.start,
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: _resetting ? null : _startNewSession,
+                icon:
+                    _resetting
+                        ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                        : const Icon(Icons.person_add_alt_1),
+                label: const Text('НАЧАТЬ НОВУЮ СЕССИЮ'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+enum _PendingFileAction { keepFiles, deleteFiles }
 
 class UploadCard extends StatefulWidget {
   final TextStyle titleStyle;
@@ -137,6 +240,7 @@ class _UploadCardState extends State<UploadCard> {
 
   Future<void> _loadPaths() async {
     final result = await StorageUtils.checkDownloadsDir();
+    if (!mounted) return;
     setState(() {
       paths = result;
     });
@@ -148,7 +252,7 @@ class _UploadCardState extends State<UploadCard> {
         content: Center(
           child: Text(
             _uploaded
-                ? 'Файлы успешно сохранён'
+                ? 'Файлы успешно сохранены'
                 : 'Ошибка соединения с сервером',
           ),
         ),
@@ -157,13 +261,50 @@ class _UploadCardState extends State<UploadCard> {
     );
   }
 
+  Future<void> _uploadPendingFiles() async {
+    if (!mounted) return;
+
+    setState(() {
+      _uploading = true;
+      _uploaded = false;
+    });
+
+    bool allSuccess = true;
+
+    for (var path in paths) {
+      final fileName = path.split('/').last;
+      final file = File(path);
+      Uint8List gif = await file.readAsBytes();
+
+      try {
+        final success = await StorageUtils.uploadGif(gif, fileName);
+        if (success) {
+          await file.delete();
+        } else {
+          allSuccess = false;
+        }
+      } catch (_) {
+        allSuccess = false;
+      }
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _uploading = false;
+      _uploaded = allSuccess;
+    });
+    await _loadPaths();
+    _showUploadStatus();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Card(
-      margin: EdgeInsets.all(8),
+      margin: const EdgeInsets.all(8),
       child: ListTile(
         title: Padding(
-          padding: const EdgeInsets.all(8.0),
+          padding: const EdgeInsets.all(8),
           child: Text(
             'Загрузить данные вручную',
             style: widget.titleStyle,
@@ -171,16 +312,16 @@ class _UploadCardState extends State<UploadCard> {
           ),
         ),
         subtitle: Padding(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               if (_uploading)
-                Column(
+                const Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 16),
+                      padding: EdgeInsets.only(bottom: 16),
                       child: CircularProgressIndicator(),
                     ),
                     Text(
@@ -190,51 +331,15 @@ class _UploadCardState extends State<UploadCard> {
                   ],
                 )
               else ...[
+                Text(
+                  paths.isEmpty
+                      ? 'Нет локальных GIF-файлов для загрузки.'
+                      : 'Локальных GIF-файлов: ${paths.length}',
+                ),
+                const SizedBox(height: 12),
                 ElevatedButton(
-                  onPressed:
-                      paths.isEmpty
-                          ? null
-                          : () async {
-                            if (!mounted) return;
-
-                            setState(() {
-                              _uploading = true;
-                              _uploaded = false; // reset
-                            });
-
-                            bool allSuccess = true;
-
-                            for (var path in paths) {
-                              final fileName = path.split('/').last;
-                              final file = File(path);
-                              Uint8List gif = await file.readAsBytes();
-
-                              // await upload and catch errors
-                              try {
-                                final success = await StorageUtils.uploadGif(
-                                  gif,
-                                  fileName,
-                                );
-                                if (success) {
-                                  await file.delete();
-                                } else {
-                                  allSuccess = false;
-                                }
-                              } catch (_) {
-                                allSuccess = false;
-                              }
-                            }
-
-                            if (!mounted) return;
-
-                            setState(() {
-                              _uploading = false;
-                              _uploaded = allSuccess;
-                            });
-                            _loadPaths();
-                            _showUploadStatus();
-                          },
-                  child: Text('Загрузить'),
+                  onPressed: paths.isEmpty ? null : _uploadPendingFiles,
+                  child: const Text('Загрузить'),
                 ),
               ],
             ],
@@ -259,103 +364,108 @@ class InputCard extends StatefulWidget {
   State<InputCard> createState() => _InputCardState();
 }
 
-enum SexChoice { male, female, none }
+enum SexChoice { male, female }
 
 class _InputCardState extends State<InputCard> {
   final TextEditingController nameController = TextEditingController();
   final TextEditingController ageController = TextEditingController();
-  final TextEditingController sexController = TextEditingController();
   final TextEditingController comController = TextEditingController();
 
-  final String _storageKeyName = "fullName";
-  final String _storageKeyAge = "age";
-  final String _storageKeySex = "sex";
-  final String _storageKeyCom = "comlpaint";
-
-  String fullName = 'NO_NAME';
+  String fullName = '';
   int? age;
-  String? sex;
-
-  SexChoice sexChoiceView = SexChoice.none;
-
-  String? complaint;
+  SexChoice? sexChoiceView;
+  String complaint = '';
 
   @override
   void initState() {
     super.initState();
+    _loadMetadata();
+  }
 
-    StorageUtils.loadString(_storageKeyName).then((value) {
-      if (value != null) {
-        setState(() {
-          fullName = value;
-        });
-      }
-    });
-    StorageUtils.loadString(_storageKeySex).then((value) {
-      if (value != null) {
-        setState(() {
-          sex = value;
-          sexChoiceView = SexChoice.values.firstWhere((e) => e.name == sex);
-        });
-      }
-    });
-    StorageUtils.loadInt(_storageKeyAge).then((value) {
-      if (value != null) {
-        setState(() {
-          age = value;
-        });
-      }
-    });
-    StorageUtils.loadString(_storageKeyCom).then((value) {
-      if (value != null) {
-        setState(() {
-          complaint = value;
-        });
-      }
+  @override
+  void dispose() {
+    nameController.dispose();
+    ageController.dispose();
+    comController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadMetadata() async {
+    final metadata = await ParticipantMetadata.load();
+    if (!mounted) return;
+
+    final loadedSex =
+        metadata.sex == null
+            ? null
+            : SexChoice.values.where((choice) => choice.name == metadata.sex);
+
+    setState(() {
+      fullName = metadata.fullName;
+      age = metadata.age;
+      complaint = metadata.complaint;
+      sexChoiceView =
+          loadedSex == null || loadedSex.isEmpty ? null : loadedSex.first;
+      nameController.text = metadata.fullName;
+      ageController.text = metadata.age?.toString() ?? '';
+      comController.text = metadata.complaint;
     });
   }
 
-  void submitForm() async {
-    // Get values from all controllers
-    String nameValue = nameController.text;
-    String ageValue = ageController.text;
-    String comValue = comController.text;
+  Future<void> submitForm() async {
+    final nameValue = nameController.text.trim();
+    final ageValue = int.tryParse(ageController.text.trim());
+    final comValue = comController.text.trim();
 
-    // Your submission logic here (API call, validation, etc.)
-    if (nameValue.isNotEmpty && ageValue.isNotEmpty) {
-      // All fields have data, proceed with submission
-      setState(() {
-        fullName = nameValue;
-        age = int.tryParse(ageValue);
-        complaint = comValue;
-      });
-      await StorageUtils.saveString(_storageKeyName, nameValue);
-      await StorageUtils.saveInt(_storageKeyAge, age!);
-      await StorageUtils.saveString(_storageKeyCom, comValue);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Center(child: Text('Данные успешно подтверждены')),
-          backgroundColor: Colors.green,
-        ),
-      );
-    } else {
-      // Show error message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Center(child: Text('Пожалуйста, введите все данные')),
-          backgroundColor: Colors.red,
-        ),
-      );
+    if (nameValue.isEmpty || ageValue == null || ageValue <= 0) {
+      _showError('Пожалуйста, введите имя и корректный возраст');
+      return;
     }
+
+    if (sexChoiceView == null) {
+      _showError('Пожалуйста, выберите пол');
+      return;
+    }
+
+    final metadata = ParticipantMetadata(
+      fullName: nameValue,
+      age: ageValue,
+      sex: sexChoiceView!.name,
+      complaint: comValue,
+    );
+
+    await metadata.save();
+
+    if (!mounted) return;
+    setState(() {
+      fullName = nameValue;
+      age = ageValue;
+      complaint = comValue;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Center(child: Text('Данные успешно подтверждены')),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Center(child: Text(message)),
+        backgroundColor: Colors.red,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Card(
-      margin: EdgeInsets.all(8),
+      margin: const EdgeInsets.all(8),
       child: ListTile(
         title: Padding(
-          padding: const EdgeInsets.all(8.0),
+          padding: const EdgeInsets.all(8),
           child: Text(
             'Введите свои данные',
             style: widget.titleStyle,
@@ -363,28 +473,22 @@ class _InputCardState extends State<InputCard> {
           ),
         ),
         subtitle: Padding(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                fullName == "NO_NAME" ? 'Имя:' : 'Ваше имя - $fullName',
+                fullName.isEmpty ? 'Имя:' : 'Ваше имя - $fullName',
                 style: widget.descriptionStyle,
               ),
               TextField(
                 controller: nameController,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   border: OutlineInputBorder(),
                   hintText: 'Введите ФИО здесь',
                 ),
-                onSubmitted: (value) async {
-                  setState(() {
-                    fullName = value;
-                  });
-                  await StorageUtils.saveString(_storageKeyName, value);
-                },
               ),
-              SizedBox(height: 5),
+              const SizedBox(height: 5),
               Text(
                 age == null ? 'Возраст:' : 'Ваш возраст - $age',
                 style: widget.descriptionStyle,
@@ -393,22 +497,17 @@ class _InputCardState extends State<InputCard> {
                 controller: ageController,
                 keyboardType: TextInputType.number,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   border: OutlineInputBorder(),
                   hintText: 'Введите свой возраст здесь',
                 ),
-                onSubmitted: (value) async {
-                  setState(() {
-                    age = int.tryParse(value);
-                  });
-                  await StorageUtils.saveInt(_storageKeyAge, age!);
-                },
               ),
-              SizedBox(height: 5),
+              const SizedBox(height: 5),
               Text('Пол:', style: widget.descriptionStyle),
               Center(
                 child: SegmentedButton<SexChoice>(
-                  segments: <ButtonSegment<SexChoice>>[
+                  emptySelectionAllowed: true,
+                  segments: const <ButtonSegment<SexChoice>>[
                     ButtonSegment<SexChoice>(
                       value: SexChoice.male,
                       label: Text('Мужчина'),
@@ -418,38 +517,32 @@ class _InputCardState extends State<InputCard> {
                       label: Text('Женщина'),
                     ),
                   ],
-                  selected: <SexChoice>{sexChoiceView},
-                  onSelectionChanged: (Set<SexChoice> newSelection) async {
+                  selected:
+                      sexChoiceView == null
+                          ? <SexChoice>{}
+                          : <SexChoice>{sexChoiceView!},
+                  onSelectionChanged: (Set<SexChoice> newSelection) {
                     setState(() {
-                      sexChoiceView = newSelection.first;
+                      sexChoiceView =
+                          newSelection.isEmpty ? null : newSelection.first;
                     });
-                    await StorageUtils.saveString(
-                      _storageKeySex,
-                      sexChoiceView.name,
-                    );
                   },
                 ),
               ),
-              SizedBox(height: 5),
+              const SizedBox(height: 5),
               Text('Жалобы (если имеются):', style: widget.descriptionStyle),
               TextField(
                 controller: comController,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   border: OutlineInputBorder(),
                   hintText: 'Укажите жалобы, если имеются',
                 ),
-                onSubmitted: (value) async {
-                  setState(() {
-                    complaint = value;
-                  });
-                  await StorageUtils.saveString(_storageKeyCom, value);
-                },
               ),
-              SizedBox(height: 20),
+              const SizedBox(height: 20),
               Center(
                 child: ElevatedButton(
                   onPressed: submitForm,
-                  child: Text('ПОДТВЕРДИТЬ'),
+                  child: const Text('ПОДТВЕРДИТЬ'),
                 ),
               ),
             ],
@@ -459,5 +552,3 @@ class _InputCardState extends State<InputCard> {
     );
   }
 }
-
-final List<PageCards> homePageCards = [];

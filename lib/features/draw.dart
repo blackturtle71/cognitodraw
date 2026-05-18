@@ -1,13 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:screen_recorder/screen_recorder.dart';
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
 
 import '../utils/utils.dart';
 import '../constants/text_constants.dart';
-
-import 'package:translit/translit.dart';
 
 class DrawMenu extends StatelessWidget {
   const DrawMenu({super.key});
@@ -58,6 +54,8 @@ class DrawMenu extends StatelessWidget {
   }
 }
 
+enum DrawTaskState { idle, recording, exporting, uploaded, failed }
+
 class DrawPage extends StatefulWidget {
   final String taskType;
   const DrawPage({super.key, required this.taskType});
@@ -67,30 +65,31 @@ class DrawPage extends StatefulWidget {
 }
 
 class _DrawPageState extends State<DrawPage> {
-  bool _recording = false;
-  bool _exporting = false;
+  DrawTaskState _taskState = DrawTaskState.idle;
   ScreenRecorderController controller = ScreenRecorderController();
   bool get canExport => controller.exporter.hasFrames;
-  bool _uploaded = false;
+  bool get _exporting => _taskState == DrawTaskState.exporting;
 
   final GlobalKey<_DrawingAreaState> _drawingAreaKey = GlobalKey();
 
   void _clearCanvas() {
-    // Access the state method through the key
     _drawingAreaKey.currentState?.clearCanvas();
   }
 
-  void _showUploadStatus() {
+  void _showUploadStatus({required bool savedLocally}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Center(
           child: Text(
-            _uploaded
+            _taskState == DrawTaskState.uploaded
                 ? 'Файл успешно сохранён'
-                : 'Ошибка соединения с сервером',
+                : savedLocally
+                ? 'Ошибка соединения с сервером. GIF сохранён локально'
+                : 'Ошибка сохранения GIF-файла',
           ),
         ),
-        backgroundColor: _uploaded ? Colors.green : Colors.red,
+        backgroundColor:
+            _taskState == DrawTaskState.uploaded ? Colors.green : Colors.red,
       ),
     );
   }
@@ -109,12 +108,8 @@ class _DrawPageState extends State<DrawPage> {
 
   bool isDrawing = false;
 
-  String fullName = 'NO_NAME';
-  final String _storageKeyName = "fullName";
-  final String _storageKeyTaps = "repeatTaps";
   int repeatTaps = 0;
 
-  final String _storageKeyTime = "timeToComplete";
   final Stopwatch _stopwatch = Stopwatch();
 
   @override
@@ -124,18 +119,11 @@ class _DrawPageState extends State<DrawPage> {
       // Lock portrait on screen open
       DeviceOrientation.portraitUp,
     ]);
-    StorageUtils.loadString(_storageKeyName).then((value) {
-      if (value != null) {
-        setState(() {
-          fullName = value.replaceAll(' ', '_');
-        });
-      }
-    });
     _resetTaps();
   }
 
   Future<void> _resetTaps() async {
-    await StorageUtils.saveInt(_storageKeyTaps, repeatTaps);
+    await StorageUtils.saveInt(StorageKeys.repeatTaps, repeatTaps);
   }
 
   void _startTimer() {
@@ -146,7 +134,87 @@ class _DrawPageState extends State<DrawPage> {
   void _stopTimer() async {
     _stopwatch.stop();
     final elapsed = _stopwatch.elapsed.inSeconds;
-    await StorageUtils.saveInt(_storageKeyTime, elapsed);
+    await StorageUtils.saveInt(StorageKeys.timeToComplete, elapsed);
+  }
+
+  Future<void> _startDrawing() async {
+    final metadata = await ParticipantMetadata.load();
+    if (!metadata.isComplete) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Center(
+            child: Text(
+              'Сначала подтвердите данные участника на главной странице',
+            ),
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      isDrawing = true;
+      _taskState = DrawTaskState.recording;
+      repeatTaps = 0;
+    });
+    await _resetTaps();
+    _clearCanvas();
+    controller.start();
+    _startTimer();
+  }
+
+  Future<void> _finishDrawing() async {
+    setState(() {
+      isDrawing = false;
+    });
+    _stopTimer();
+    _clearCanvas();
+    controller.stop();
+
+    if (!canExport || _exporting) {
+      setState(() {
+        _taskState = DrawTaskState.failed;
+      });
+      _showUploadStatus(savedLocally: false);
+      return;
+    }
+
+    setState(() {
+      _taskState = DrawTaskState.exporting;
+    });
+
+    final gif = await controller.exporter.exportGif();
+    if (gif == null) {
+      if (!mounted) return;
+      setState(() {
+        _taskState = DrawTaskState.failed;
+      });
+      _showUploadStatus(savedLocally: false);
+      return;
+    }
+
+    final metadata = await ParticipantMetadata.load();
+    final fileName = StorageUtils.buildGifFileName(
+      metadata: metadata,
+      taskType: widget.taskType,
+    );
+
+    final uploaded = await StorageUtils.uploadGif(gif, fileName);
+    var savedLocally = false;
+
+    if (!uploaded) {
+      savedLocally = await StorageUtils.savePendingGif(gif, fileName);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _taskState = uploaded ? DrawTaskState.uploaded : DrawTaskState.failed;
+    });
+    _showUploadStatus(savedLocally: savedLocally);
+    _showThanks();
   }
 
   @override
@@ -174,11 +242,6 @@ class _DrawPageState extends State<DrawPage> {
     );
     final descriptionStyle = TextStyle(
       fontSize: 16,
-      color: theme.colorScheme.onSurface,
-      height: 1.5,
-    );
-    final instuctionStyle = TextStyle(
-      fontSize: 14,
       color: theme.colorScheme.onSurface,
       height: 1.5,
     );
@@ -254,60 +317,8 @@ class _DrawPageState extends State<DrawPage> {
                                         children: [
                                           TextButton(
                                             onPressed: () async {
-                                              setState(() {
-                                                isDrawing = false;
-                                              });
-                                              _stopTimer();
                                               Navigator.pop(context);
-                                              _clearCanvas();
-                                              controller.stop();
-                                              setState(() {
-                                                _recording = false;
-                                              });
-                                              if (canExport && !_exporting) {
-                                                setState(() {
-                                                  _exporting = true;
-                                                });
-                                                var gif =
-                                                    await controller.exporter
-                                                        .exportGif();
-                                                if (gif == null) {
-                                                  throw Exception();
-                                                }
-                                                // transliterate the name, bloody hell, this is stupid
-                                                fullName = Translit()
-                                                    .toTranslit(
-                                                      source: fullName,
-                                                    );
-                                                final fileName =
-                                                    '${fullName}_${widget.taskType}_${DateTime.now().microsecondsSinceEpoch}.gif';
-
-                                                StorageUtils.uploadGif(
-                                                  gif,
-                                                  fileName,
-                                                ).then((success) async {
-                                                  if (success) {
-                                                    setState(() {
-                                                      _uploaded = true;
-                                                    });
-                                                  } else {
-                                                    _uploaded = false;
-                                                    final directory =
-                                                        await getDownloadsDirectory();
-                                                    final filePath =
-                                                        '${directory?.path}/$fileName';
-                                                    final file = File(filePath);
-                                                    await file.writeAsBytes(
-                                                      gif,
-                                                    );
-                                                  }
-                                                  setState(() {
-                                                    _exporting = false;
-                                                  });
-                                                  _showUploadStatus();
-                                                  _showThanks();
-                                                });
-                                              }
+                                              await _finishDrawing();
                                             },
                                             child: Text('ДА'),
                                           ),
@@ -338,17 +349,9 @@ class _DrawPageState extends State<DrawPage> {
                                             MainAxisAlignment.center,
                                         children: [
                                           TextButton(
-                                            onPressed: () {
+                                            onPressed: () async {
                                               Navigator.pop(context);
-                                              setState(() {
-                                                isDrawing = true;
-                                              });
-                                              _clearCanvas();
-                                              controller.start();
-                                              setState(() {
-                                                _recording = true;
-                                              });
-                                              _startTimer();
+                                              await _startDrawing();
                                             },
                                             child: Text('ДА'),
                                           ),
@@ -378,7 +381,7 @@ class _DrawPageState extends State<DrawPage> {
                             _clearCanvas();
                             repeatTaps += 1;
                             await StorageUtils.saveInt(
-                              _storageKeyTaps,
+                              StorageKeys.repeatTaps,
                               repeatTaps,
                             );
                           },
@@ -445,11 +448,11 @@ class DrawingArea extends StatefulWidget {
 // Define a class to represent each stroke with timing data
 
 class _DrawingAreaState extends State<DrawingArea> {
-  List<DrawingStroke> _lines = [];
+  final List<DrawingStroke> _lines = [];
   List<Offset> _currentLine = [];
   List<Duration> _currentTimestamps = [];
-  Color _selectedColor = Colors.black;
-  double _strokeWidth = 5.0;
+  final Color _selectedColor = Colors.black;
+  final double _strokeWidth = 5.0;
   final GlobalKey _drawingAreaKey = GlobalKey();
   DateTime? _drawingStartTime;
 
@@ -487,9 +490,7 @@ class _DrawingAreaState extends State<DrawingArea> {
             }
           },
           onPanStart: (details) {
-            if (_drawingStartTime == null) {
-              _drawingStartTime = DateTime.now();
-            }
+            _drawingStartTime ??= DateTime.now();
 
             final RenderBox renderBox =
                 _drawingAreaKey.currentContext?.findRenderObject() as RenderBox;

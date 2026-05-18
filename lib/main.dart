@@ -2,10 +2,8 @@ import 'package:flutter/material.dart';
 import 'features/home.dart';
 import 'features/draw.dart';
 import 'constants/theme.dart';
-import 'utils/utils.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'dart:io';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -14,18 +12,6 @@ Future<void> main() async {
     url: dotenv.env['SUPABASE_URL']!,
     anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
   );
-
-  // purge user meta
-  await clearSharedPreferences();
-  // purge user files
-  List paths = [];
-  paths = await StorageUtils.checkDownloadsDir();
-  if (paths.isNotEmpty) {
-    for (var path in paths) {
-      final file = File(path);
-      await file.delete();
-    }
-  }
 
   runApp(const MyApp());
 }
@@ -62,7 +48,6 @@ class _NavBarState extends State<NavBar> {
   int curPageIndex = 0;
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: Text(widget.title), centerTitle: true),
       bottomNavigationBar: NavigationBar(
