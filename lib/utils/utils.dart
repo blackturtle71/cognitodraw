@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:translit/translit.dart';
@@ -8,6 +10,7 @@ import 'package:translit/translit.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'dart:io';
+import 'dart:math';
 
 class StorageKeys {
   static const fullName = 'fullName';
@@ -17,6 +20,7 @@ class StorageKeys {
   static const legacyComplaint = 'comlpaint';
   static const repeatTaps = 'repeatTaps';
   static const timeToComplete = 'timeToComplete';
+  static const sessionId = 'sessionId';
 
   static const sessionKeys = [
     fullName,
@@ -26,6 +30,7 @@ class StorageKeys {
     legacyComplaint,
     repeatTaps,
     timeToComplete,
+    sessionId,
   ];
 }
 
@@ -112,7 +117,73 @@ class ParticipantMetadata {
   }
 }
 
+class DrawingAttemptSnapshot {
+  final ParticipantMetadata metadata;
+  final String taskType;
+  final String sessionId;
+  final String attemptId;
+  final String fileName;
+  final int? timeToComplete;
+  final int? repeatTaps;
+  final String createdAt;
+
+  const DrawingAttemptSnapshot({
+    required this.metadata,
+    required this.taskType,
+    required this.sessionId,
+    required this.attemptId,
+    required this.fileName,
+    required this.timeToComplete,
+    required this.repeatTaps,
+    required this.createdAt,
+  });
+
+  Map<String, Object?> get supabasePayload {
+    return metadata.toSupabasePayload(
+      fileName: fileName,
+      timeToComplete: timeToComplete,
+      repeatTaps: repeatTaps,
+    );
+  }
+
+  Map<String, Object?> toJson() {
+    return {
+      'fullName': metadata.fullName,
+      'age': metadata.age,
+      'sex': metadata.sex,
+      'complaint': metadata.complaint,
+      'taskType': taskType,
+      'sessionId': sessionId,
+      'attemptId': attemptId,
+      'fileName': fileName,
+      'timeToComplete': timeToComplete,
+      'repeatTaps': repeatTaps,
+      'createdAt': createdAt,
+    };
+  }
+
+  static DrawingAttemptSnapshot fromJson(Map<String, Object?> json) {
+    return DrawingAttemptSnapshot(
+      metadata: ParticipantMetadata(
+        fullName: json['fullName'] as String? ?? '',
+        age: json['age'] as int?,
+        sex: json['sex'] as String?,
+        complaint: json['complaint'] as String? ?? '',
+      ),
+      taskType: json['taskType'] as String? ?? 'legacy',
+      sessionId: json['sessionId'] as String? ?? '',
+      attemptId: json['attemptId'] as String? ?? '',
+      fileName: json['fileName'] as String? ?? '',
+      timeToComplete: json['timeToComplete'] as int?,
+      repeatTaps: json['repeatTaps'] as int?,
+      createdAt: json['createdAt'] as String? ?? '',
+    );
+  }
+}
+
 class StorageUtils {
+  static final Random _idRandom = Random.secure();
+
   static Future<void> saveString(String key, String value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(key, value);
@@ -145,19 +216,65 @@ class StorageUtils {
     }
   }
 
+  static Future<String> startParticipantSession() async {
+    await clearParticipantSession();
+    final sessionId = _buildId('s');
+    await saveString(StorageKeys.sessionId, sessionId);
+    return sessionId;
+  }
+
+  static Future<String> ensureSessionId() async {
+    final existing = await loadString(StorageKeys.sessionId);
+    if (existing != null && existing.isNotEmpty) {
+      return existing;
+    }
+
+    final sessionId = _buildId('s');
+    await saveString(StorageKeys.sessionId, sessionId);
+    return sessionId;
+  }
+
+  static String buildAttemptId() {
+    return _buildId('a');
+  }
+
   static String buildGifFileName({
     required ParticipantMetadata metadata,
     required String taskType,
-    DateTime? timestamp,
+    required String sessionId,
+    required String attemptId,
   }) {
-    final time = timestamp ?? DateTime.now();
-    return '${metadata.fileSafeName}_${taskType}_${time.microsecondsSinceEpoch}.gif';
+    return '${metadata.fileSafeName}_${taskType}_${sessionId}_$attemptId.gif';
+  }
+
+  static Future<DrawingAttemptSnapshot> buildAttemptSnapshot({
+    required String taskType,
+    required int? timeToComplete,
+    required int? repeatTaps,
+  }) async {
+    final metadata = await ParticipantMetadata.load();
+    final sessionId = await ensureSessionId();
+    final attemptId = buildAttemptId();
+    final fileName = buildGifFileName(
+      metadata: metadata,
+      taskType: taskType,
+      sessionId: sessionId,
+      attemptId: attemptId,
+    );
+
+    return DrawingAttemptSnapshot(
+      metadata: metadata,
+      taskType: taskType,
+      sessionId: sessionId,
+      attemptId: attemptId,
+      fileName: fileName,
+      timeToComplete: timeToComplete,
+      repeatTaps: repeatTaps,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+    );
   }
 
   static Future<bool> uploadGif(List<int> gifBytes, String fileName) async {
-    final supabase = Supabase.instance.client;
-    Uint8List uint8Gif = Uint8List.fromList(gifBytes);
-
     final metadata = await ParticipantMetadata.load();
     final repeatTaps = await loadInt(StorageKeys.repeatTaps);
     final timeToComplete = await loadInt(StorageKeys.timeToComplete);
@@ -169,20 +286,49 @@ class StorageUtils {
       return false;
     }
 
+    final snapshot = DrawingAttemptSnapshot(
+      metadata: metadata,
+      taskType: _taskTypeFromFileName(fileName),
+      sessionId: '',
+      attemptId: '',
+      fileName: fileName,
+      timeToComplete: timeToComplete,
+      repeatTaps: repeatTaps,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+    );
+
+    return uploadAttempt(gifBytes, snapshot);
+  }
+
+  static Future<bool> uploadAttempt(
+    List<int> gifBytes,
+    DrawingAttemptSnapshot snapshot,
+  ) async {
+    if (!snapshot.metadata.isComplete) {
+      if (kDebugMode) {
+        debugPrint('Upload blocked: participant metadata is incomplete.');
+      }
+      return false;
+    }
+
+    final supabase = Supabase.instance.client;
+    Uint8List uint8Gif = Uint8List.fromList(gifBytes);
+
     try {
       await supabase
           .from(SupabaseConfig.metadataTable)
-          .upsert(
-            metadata.toSupabasePayload(
-              fileName: fileName,
-              timeToComplete: timeToComplete,
-              repeatTaps: repeatTaps,
-            ),
-          );
+          .upsert(snapshot.supabasePayload);
 
       await supabase.storage
           .from(SupabaseConfig.gifBucket)
-          .uploadBinary(fileName, uint8Gif);
+          .uploadBinary(
+            snapshot.fileName,
+            uint8Gif,
+            fileOptions: const FileOptions(
+              upsert: true,
+              contentType: 'image/gif',
+            ),
+          );
 
       return true;
     } catch (e) {
@@ -239,11 +385,71 @@ class StorageUtils {
     return true;
   }
 
+  static Future<bool> savePendingAttempt(
+    List<int> gifBytes,
+    DrawingAttemptSnapshot snapshot,
+  ) async {
+    final directory = await _safeDownloadsDirectory();
+    if (directory == null) {
+      return false;
+    }
+
+    final gifFile = File(p.join(directory.path, snapshot.fileName));
+    final sidecarFile = File(_sidecarPath(gifFile.path));
+
+    await gifFile.writeAsBytes(gifBytes);
+    await sidecarFile.writeAsString(jsonEncode(snapshot.toJson()));
+    return true;
+  }
+
+  static Future<DrawingAttemptSnapshot?> loadPendingAttempt(
+    String gifPath,
+  ) async {
+    final sidecarFile = File(_sidecarPath(gifPath));
+    if (!await sidecarFile.exists()) {
+      return null;
+    }
+
+    try {
+      final content = await sidecarFile.readAsString();
+      final json = jsonDecode(content) as Map<String, dynamic>;
+      final snapshot = DrawingAttemptSnapshot.fromJson(json);
+      return snapshot.fileName.isEmpty ? null : snapshot;
+    } on Object {
+      return null;
+    }
+  }
+
+  static Future<bool> uploadPendingGif(String gifPath) async {
+    final file = File(gifPath);
+    final gif = await file.readAsBytes();
+    final snapshot = await loadPendingAttempt(gifPath);
+
+    final success =
+        snapshot == null
+            ? await uploadGif(gif, p.basename(gifPath))
+            : await uploadAttempt(gif, snapshot);
+
+    if (success) {
+      await file.delete();
+      final sidecarFile = File(_sidecarPath(gifPath));
+      if (await sidecarFile.exists()) {
+        await sidecarFile.delete();
+      }
+    }
+
+    return success;
+  }
+
   static Future<void> deletePendingFiles(List<String> paths) async {
     for (final path in paths) {
       final file = File(path);
       if (await file.exists()) {
         await file.delete();
+      }
+      final sidecarFile = File(_sidecarPath(path));
+      if (await sidecarFile.exists()) {
+        await sidecarFile.delete();
       }
     }
   }
@@ -254,6 +460,32 @@ class StorageUtils {
     } on Object {
       return null;
     }
+  }
+
+  static String _buildId(String prefix) {
+    final time = DateTime.now().toUtc().microsecondsSinceEpoch.toRadixString(
+      36,
+    );
+    final entropy = _idRandom
+        .nextInt(0xFFFFFF)
+        .toRadixString(36)
+        .padLeft(5, '0');
+    return '${prefix}_${time}_$entropy';
+  }
+
+  static String _sidecarPath(String gifPath) {
+    return p.setExtension(gifPath, '.json');
+  }
+
+  static String _taskTypeFromFileName(String fileName) {
+    final parts = p.basenameWithoutExtension(fileName).split('_');
+    if (parts.contains('clock')) {
+      return 'clock';
+    }
+    if (parts.contains('cube')) {
+      return 'cube';
+    }
+    return 'legacy';
   }
 }
 

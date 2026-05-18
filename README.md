@@ -18,6 +18,7 @@ The app collects participant metadata, presents Russian clock and cube drawing t
 - Supabase upload for GIF files and participant metadata.
 - Local fallback for failed uploads, with manual upload from the home screen.
 - Pending local GIFs are kept across new participant sessions unless the operator explicitly deletes them.
+- Pending local GIFs created by current builds have a JSON sidecar with the original participant and task metadata.
 
 ## Tech Stack
 
@@ -68,6 +69,8 @@ The upload code expects:
 
 - A storage bucket named `gif_storage`.
 - A table named `user_meta`.
+
+See `docs/supabase.md` for the current client-side upload contract, filename format, pending-upload sidecar format, and future schema recommendations.
 
 The `user_meta` upsert payload includes:
 
@@ -151,6 +154,7 @@ Manual upload procedure:
 
 - Most user-facing text is Russian and lives in `lib/constants/text_constants.dart`.
 - Local participant data uses centralized keys in `StorageKeys`.
+- GIF filenames use `{userName}_{taskType}_{sessionId}_{attemptId}.gif`.
 - The old misspelled complaint key `comlpaint` is read once and migrated to `complaint`.
 - Android release builds still use debug signing for the controlled pilot; replace signing before production distribution.
 - `flutter analyze` and `flutter test` should pass before installing a pilot build.

@@ -131,10 +131,11 @@ class _DrawPageState extends State<DrawPage> {
     _stopwatch.start();
   }
 
-  void _stopTimer() async {
+  Future<int> _stopTimer() async {
     _stopwatch.stop();
     final elapsed = _stopwatch.elapsed.inSeconds;
     await StorageUtils.saveInt(StorageKeys.timeToComplete, elapsed);
+    return elapsed;
   }
 
   Future<void> _startDrawing() async {
@@ -170,7 +171,7 @@ class _DrawPageState extends State<DrawPage> {
     setState(() {
       isDrawing = false;
     });
-    _stopTimer();
+    final timeToComplete = await _stopTimer();
     _clearCanvas();
     controller.stop();
 
@@ -196,17 +197,17 @@ class _DrawPageState extends State<DrawPage> {
       return;
     }
 
-    final metadata = await ParticipantMetadata.load();
-    final fileName = StorageUtils.buildGifFileName(
-      metadata: metadata,
+    final snapshot = await StorageUtils.buildAttemptSnapshot(
       taskType: widget.taskType,
+      timeToComplete: timeToComplete,
+      repeatTaps: repeatTaps,
     );
 
-    final uploaded = await StorageUtils.uploadGif(gif, fileName);
+    final uploaded = await StorageUtils.uploadAttempt(gif, snapshot);
     var savedLocally = false;
 
     if (!uploaded) {
-      savedLocally = await StorageUtils.savePendingGif(gif, fileName);
+      savedLocally = await StorageUtils.savePendingAttempt(gif, snapshot);
     }
 
     if (!mounted) return;

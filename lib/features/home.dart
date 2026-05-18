@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -23,7 +21,7 @@ class _HomePageState extends State<HomePage> {
       await StorageUtils.deletePendingFiles(paths);
     }
 
-    await StorageUtils.clearParticipantSession();
+    await StorageUtils.startParticipantSession();
 
     if (!mounted) return;
     setState(() {
@@ -272,15 +270,9 @@ class _UploadCardState extends State<UploadCard> {
     bool allSuccess = true;
 
     for (var path in paths) {
-      final fileName = path.split('/').last;
-      final file = File(path);
-      Uint8List gif = await file.readAsBytes();
-
       try {
-        final success = await StorageUtils.uploadGif(gif, fileName);
-        if (success) {
-          await file.delete();
-        } else {
+        final success = await StorageUtils.uploadPendingGif(path);
+        if (!success) {
           allSuccess = false;
         }
       } catch (_) {
