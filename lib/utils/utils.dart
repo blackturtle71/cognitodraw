@@ -221,6 +221,10 @@ class StorageUtils {
     }
   }
 
+  static Future<bool> canUsePendingGifStorage() async {
+    return await _safeDownloadsDirectory() != null;
+  }
+
   static Future<bool> savePendingGif(
     List<int> gifBytes,
     String fileName,
@@ -247,7 +251,7 @@ class StorageUtils {
   static Future<Directory?> _safeDownloadsDirectory() async {
     try {
       return await getDownloadsDirectory();
-    } on UnsupportedError {
+    } on Object {
       return null;
     }
   }

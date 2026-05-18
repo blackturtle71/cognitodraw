@@ -85,7 +85,7 @@ class _DrawPageState extends State<DrawPage> {
                 ? 'Файл успешно сохранён'
                 : savedLocally
                 ? 'Ошибка соединения с сервером. GIF сохранён локально'
-                : 'Ошибка сохранения GIF-файла',
+                : 'Не удалось загрузить или сохранить GIF локально',
           ),
         ),
         backgroundColor:

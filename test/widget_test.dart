@@ -32,5 +32,6 @@ void main() {
       scrollable: scrollable,
     );
     expect(find.text('Загрузить данные вручную'), findsOneWidget);
+    expect(find.text('Нет локальных GIF-файлов для загрузки.'), findsOneWidget);
   });
 }

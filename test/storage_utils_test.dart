@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:cognitodraw/utils/utils.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -45,7 +47,7 @@ void main() {
   });
 
   test(
-    'clearing participant session preserves unrelated preferences',
+    'clearing participant session preserves unrelated and pending-file preferences',
     () async {
       SharedPreferences.setMockInitialValues({
         StorageKeys.fullName: 'Иван Иванов',
@@ -53,6 +55,7 @@ void main() {
         StorageKeys.sex: 'male',
         StorageKeys.repeatTaps: 2,
         'operatorPreference': 'keep',
+        'pendingGifPath': '/tmp/pending.gif',
       });
 
       await StorageUtils.clearParticipantSession();
@@ -63,7 +66,20 @@ void main() {
       expect(prefs.getString(StorageKeys.sex), isNull);
       expect(prefs.getInt(StorageKeys.repeatTaps), isNull);
       expect(prefs.getString('operatorPreference'), 'keep');
+      expect(prefs.getString('pendingGifPath'), '/tmp/pending.gif');
     },
+  );
+
+  test(
+    'pending GIF storage gracefully reports unsupported test platform',
+    () async {
+      final available = await StorageUtils.canUsePendingGifStorage();
+      final saved = await StorageUtils.savePendingGif([1, 2, 3], 'test.gif');
+
+      expect(available, isFalse);
+      expect(saved, isFalse);
+    },
+    skip: !Platform.isLinux,
   );
 
   test('GIF filenames are transliterated and task scoped', () {

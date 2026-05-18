@@ -1,10 +1,13 @@
 # Cognitodraw
 
-Cognitodraw is a Flutter application for collecting drawing-task data that can be used in cognitive impairment screening workflows. The app asks a participant for basic metadata, presents clock and cube drawing tasks in Russian, records the drawing interaction as a GIF, and uploads the result plus metadata to Supabase.
+Cognitodraw is a Flutter application for collecting drawing-task data for cognitive impairment screening workflows. It is currently optimized for a controlled Android/tablet pilot where one device can be used by multiple participants.
+
+The app collects participant metadata, presents Russian clock and cube drawing tasks, records the drawing interaction as a GIF, and uploads the GIF plus metadata to Supabase. If upload fails, the app attempts to keep the exported GIF locally for manual upload.
 
 ## Current Features
 
 - Participant metadata form: full name, age, sex, and optional complaints.
+- Explicit new-participant session reset for shared-device use.
 - Two drawing tasks:
   - Clock drawing task.
   - Cube copying task with a reference image.
@@ -13,7 +16,8 @@ Cognitodraw is a Flutter application for collecting drawing-task data that can b
 - Time-to-complete tracking for each drawing task.
 - GIF export of the recorded drawing session.
 - Supabase upload for GIF files and participant metadata.
-- Local fallback: if upload fails, exported GIFs are saved to the user's downloads directory and can be uploaded later from the home screen.
+- Local fallback for failed uploads, with manual upload from the home screen.
+- Pending local GIFs are kept across new participant sessions unless the operator explicitly deletes them.
 
 ## Tech Stack
 
@@ -21,8 +25,8 @@ Cognitodraw is a Flutter application for collecting drawing-task data that can b
 - Material UI with a generated light color scheme.
 - `screen_recorder` for GIF capture.
 - `audioplayers` for task audio prompts.
-- `shared_preferences` for temporary local metadata.
-- `path_provider` for downloads-directory access.
+- `shared_preferences` for temporary participant/session metadata.
+- `path_provider` for pending GIF storage access.
 - `supabase_flutter` for metadata and file upload.
 
 ## Project Layout
@@ -31,11 +35,11 @@ Cognitodraw is a Flutter application for collecting drawing-task data that can b
 lib/
   main.dart                  App bootstrap, Supabase initialization, routes, bottom navigation.
   features/
-    home.dart                User guide, participant form, manual upload UI.
+    home.dart                User guide, new-session reset, participant form, manual upload UI.
     draw.dart                Task menu, drawing screens, recording/export flow.
     settings.dart            Placeholder settings screen.
   utils/
-    utils.dart               Shared preferences, Supabase upload, drawing painter, dialogs, audio button.
+    utils.dart               Storage keys, metadata model, Supabase upload, pending files, drawing painter, dialogs, audio button.
   constants/
     text_constants.dart      Russian UI/task copy.
     theme.dart               Material color schemes.
@@ -49,7 +53,7 @@ assets/
     icon.png
 ```
 
-Platform folders are present for Android, iOS, Linux, macOS, Windows, and web.
+Platform folders are present for Android, iOS, Linux, macOS, Windows, and web. The active pilot target is Android/tablet.
 
 ## Supabase Setup
 
@@ -60,12 +64,12 @@ SUPABASE_URL=your-project-url
 SUPABASE_ANON_KEY=your-anon-key
 ```
 
-The current upload code expects:
+The upload code expects:
 
 - A storage bucket named `gif_storage`.
 - A table named `user_meta`.
 
-The `user_meta` upsert payload currently includes these fields:
+The `user_meta` upsert payload includes:
 
 ```text
 fullName
@@ -104,20 +108,49 @@ Run tests:
 flutter test
 ```
 
+## Android Pilot Checklist
+
+Before a pilot session:
+
+1. Install a build on the target Android tablet.
+2. Confirm the app is named `Cognitodraw` on the launcher.
+3. Confirm `.env` points at the intended Supabase project.
+4. Confirm the `gif_storage` bucket and `user_meta` table exist.
+5. Confirm the tablet has network access.
+
+For each participant:
+
+1. On the home screen, press `НАЧАТЬ НОВУЮ СЕССИЮ`.
+2. If the app reports pending local GIF files, upload them first or explicitly choose whether to keep/delete them.
+3. Enter participant metadata and press `ПОДТВЕРДИТЬ`.
+4. Open the drawing tab and choose `Часы` or `Куб`.
+5. Press `Начать`, complete the task, then press `Завершить`.
+6. Confirm the app reports successful upload or local fallback.
+7. Before handing the tablet to the next participant, return to step 1.
+
+Manual upload procedure:
+
+1. Open the home screen.
+2. Use `Загрузить данные вручную`.
+3. If upload succeeds, the local pending GIF files are deleted.
+4. If upload fails, keep the files and retry when network/server access is restored.
+
 ## Data Flow
 
-1. On startup, the app loads `.env`, initializes Supabase, clears saved participant metadata, and removes pending files from the downloads directory.
-2. The participant fills out metadata on the home screen.
-3. The participant chooses either the clock or cube task.
-4. Pressing `Начать` starts the timer and screen recorder.
-5. Pressing `Начать заново` clears the canvas and increments `repeatTaps`.
-6. Pressing `Завершить` stops recording, exports a GIF, and attempts to upload it.
-7. If upload succeeds, metadata is written to `user_meta` and the GIF is stored in `gif_storage`.
-8. If upload fails, the GIF is saved locally in the downloads directory for manual upload.
+1. On startup, the app loads `.env` and initializes Supabase. It does not clear participant data automatically.
+2. The operator starts a new participant session from the home screen.
+3. The app clears participant metadata and task state. Pending GIF files are preserved unless the operator chooses deletion.
+4. The participant metadata form must be confirmed before drawing can start.
+5. Pressing `Начать` starts the timer and screen recorder.
+6. Pressing `Начать заново` clears the canvas and increments `repeatTaps`.
+7. Pressing `Завершить` stops recording, exports a GIF, and attempts upload.
+8. If upload succeeds, metadata is written to `user_meta` and the GIF is stored in `gif_storage`.
+9. If upload fails, the GIF is saved locally when the platform provides a downloads directory.
 
 ## Notes for Development
 
 - Most user-facing text is Russian and lives in `lib/constants/text_constants.dart`.
-- The app currently clears shared preferences and pending download files on startup.
-- The participant complaint key is currently spelled `comlpaint` in local storage and upload code; keep this in mind when reading existing data paths.
-- `test/widget_test.dart` is still the default Flutter scaffold test and does not reflect the current UI.
+- Local participant data uses centralized keys in `StorageKeys`.
+- The old misspelled complaint key `comlpaint` is read once and migrated to `complaint`.
+- Android release builds still use debug signing for the controlled pilot; replace signing before production distribution.
+- `flutter analyze` and `flutter test` should pass before installing a pilot build.
