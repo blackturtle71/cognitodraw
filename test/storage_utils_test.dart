@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cognitodraw/utils/utils.dart';
@@ -152,5 +153,58 @@ void main() {
       'complaint',
       'comment',
     });
+  });
+
+  test('task statuses default and persist per task', () async {
+    expect(await StorageUtils.loadTaskStatus('clock'), 'notStarted');
+
+    await StorageUtils.saveTaskStatus('clock', 'uploaded');
+    await StorageUtils.saveTaskStatus('cube', 'pendingUpload');
+
+    final statuses = await StorageUtils.loadTaskStatuses();
+
+    expect(statuses['clock'], 'uploaded');
+    expect(statuses['cube'], 'pendingUpload');
+  });
+
+  test('pending upload info uses sidecar metadata when available', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'cognitodraw_test_',
+    );
+    addTearDown(() async {
+      if (await directory.exists()) {
+        await directory.delete(recursive: true);
+      }
+    });
+
+    final gif = File('${directory.path}/Ivan_clock_s_1_a_1.gif');
+    await gif.writeAsBytes([1, 2, 3]);
+    final sidecar = File('${directory.path}/Ivan_clock_s_1_a_1.json');
+    await sidecar.writeAsString(
+      jsonEncode(
+        const DrawingAttemptSnapshot(
+          metadata: ParticipantMetadata(
+            fullName: 'Иван Иванов',
+            age: 72,
+            sex: 'male',
+            complaint: '',
+          ),
+          taskType: 'clock',
+          sessionId: 's_1',
+          attemptId: 'a_1',
+          fileName: 'Ivan_clock_s_1_a_1.gif',
+          timeToComplete: 20,
+          repeatTaps: 0,
+          createdAt: '2026-05-18T12:00:00.000Z',
+        ).toJson(),
+      ),
+    );
+
+    final infos = await StorageUtils.loadPendingUploadInfo([gif.path]);
+
+    expect(infos, hasLength(1));
+    expect(infos.single.participantName, 'Иван Иванов');
+    expect(infos.single.taskType, 'clock');
+    expect(infos.single.hasSidecar, isTrue);
   });
 }

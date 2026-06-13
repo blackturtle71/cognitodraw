@@ -8,6 +8,7 @@ The app collects participant metadata, presents Russian clock and cube drawing t
 
 - Participant metadata form: full name, age, sex, and optional complaints.
 - Explicit new-participant session reset for shared-device use.
+- Home-screen session status: participant metadata, session ID, task status, and pending upload count.
 - Two drawing tasks:
   - Clock drawing task.
   - Cube copying task with a reference image.
@@ -36,7 +37,7 @@ The app collects participant metadata, presents Russian clock and cube drawing t
 lib/
   main.dart                  App bootstrap, Supabase initialization, routes, bottom navigation.
   features/
-    home.dart                User guide, new-session reset, participant form, manual upload UI.
+    home.dart                User guide, session status, new-session reset, participant form, manual upload UI.
     draw.dart                Task menu, drawing screens, recording/export flow.
     settings.dart            Placeholder settings screen.
   utils/
@@ -126,10 +127,11 @@ For each participant:
 1. On the home screen, press `НАЧАТЬ НОВУЮ СЕССИЮ`.
 2. If the app reports pending local GIF files, upload them first or explicitly choose whether to keep/delete them.
 3. Enter participant metadata and press `ПОДТВЕРДИТЬ`.
-4. Open the drawing tab and choose `Часы` or `Куб`.
-5. Press `Начать`, complete the task, then press `Завершить`.
-6. Confirm the app reports successful upload or local fallback.
-7. Before handing the tablet to the next participant, return to step 1.
+4. Check `Статус сессии` to confirm the participant and task state.
+5. Open the drawing tab and choose `Часы` or `Куб`.
+6. Press `Начать`, complete the task, then press `Завершить`.
+7. Confirm the app reports successful upload or local fallback.
+8. Before handing the tablet to the next participant, return to step 1.
 
 Manual upload procedure:
 
@@ -155,6 +157,7 @@ Manual upload procedure:
 - Most user-facing text is Russian and lives in `lib/constants/text_constants.dart`.
 - Local participant data uses centralized keys in `StorageKeys`.
 - GIF filenames use `{userName}_{taskType}_{sessionId}_{attemptId}.gif`.
+- Task status is stored per session for clock and cube tasks.
 - The old misspelled complaint key `comlpaint` is read once and migrated to `complaint`.
 - Android release builds still use debug signing for the controlled pilot; replace signing before production distribution.
 - `flutter analyze` and `flutter test` should pass before installing a pilot build.

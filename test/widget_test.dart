@@ -15,6 +15,13 @@ void main() {
     expect(find.text('Руководство пользователя'), findsOneWidget);
     final scrollable = find.byType(Scrollable).first;
     await tester.scrollUntilVisible(
+      find.text('Статус сессии'),
+      300,
+      scrollable: scrollable,
+    );
+    expect(find.text('Статус сессии'), findsOneWidget);
+    expect(find.text('данные не подтверждены'), findsOneWidget);
+    await tester.scrollUntilVisible(
       find.text('Новая сессия участника'),
       300,
       scrollable: scrollable,

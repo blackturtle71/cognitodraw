@@ -21,6 +21,8 @@ class StorageKeys {
   static const repeatTaps = 'repeatTaps';
   static const timeToComplete = 'timeToComplete';
   static const sessionId = 'sessionId';
+  static const clockTaskStatus = 'clockTaskStatus';
+  static const cubeTaskStatus = 'cubeTaskStatus';
 
   static const sessionKeys = [
     fullName,
@@ -31,6 +33,8 @@ class StorageKeys {
     repeatTaps,
     timeToComplete,
     sessionId,
+    clockTaskStatus,
+    cubeTaskStatus,
   ];
 }
 
@@ -181,6 +185,28 @@ class DrawingAttemptSnapshot {
   }
 }
 
+class PendingUploadInfo {
+  final String path;
+  final String fileName;
+  final String participantName;
+  final String taskType;
+  final bool hasSidecar;
+
+  const PendingUploadInfo({
+    required this.path,
+    required this.fileName,
+    required this.participantName,
+    required this.taskType,
+    required this.hasSidecar,
+  });
+
+  String get displayTitle {
+    final taskLabel = taskType == 'legacy' ? 'legacy' : taskType;
+    final name = participantName.isEmpty ? 'UNKNOWN' : participantName;
+    return '$name - $taskLabel';
+  }
+}
+
 class StorageUtils {
   static final Random _idRandom = Random.secure();
 
@@ -236,6 +262,31 @@ class StorageUtils {
 
   static String buildAttemptId() {
     return _buildId('a');
+  }
+
+  static Future<void> saveTaskStatus(String taskType, String status) async {
+    final key = _taskStatusKey(taskType);
+    if (key == null) {
+      return;
+    }
+
+    await saveString(key, status);
+  }
+
+  static Future<String> loadTaskStatus(String taskType) async {
+    final key = _taskStatusKey(taskType);
+    if (key == null) {
+      return 'notStarted';
+    }
+
+    return await loadString(key) ?? 'notStarted';
+  }
+
+  static Future<Map<String, String>> loadTaskStatuses() async {
+    return {
+      'clock': await loadTaskStatus('clock'),
+      'cube': await loadTaskStatus('cube'),
+    };
   }
 
   static String buildGifFileName({
@@ -420,6 +471,27 @@ class StorageUtils {
     }
   }
 
+  static Future<List<PendingUploadInfo>> loadPendingUploadInfo(
+    List<String> paths,
+  ) async {
+    final infos = <PendingUploadInfo>[];
+
+    for (final path in paths) {
+      final snapshot = await loadPendingAttempt(path);
+      infos.add(
+        PendingUploadInfo(
+          path: path,
+          fileName: p.basename(path),
+          participantName: snapshot?.metadata.fullName ?? '',
+          taskType: snapshot?.taskType ?? _taskTypeFromFileName(path),
+          hasSidecar: snapshot != null,
+        ),
+      );
+    }
+
+    return infos;
+  }
+
   static Future<bool> uploadPendingGif(String gifPath) async {
     final file = File(gifPath);
     final gif = await file.readAsBytes();
@@ -486,6 +558,17 @@ class StorageUtils {
       return 'cube';
     }
     return 'legacy';
+  }
+
+  static String? _taskStatusKey(String taskType) {
+    switch (taskType) {
+      case 'clock':
+        return StorageKeys.clockTaskStatus;
+      case 'cube':
+        return StorageKeys.cubeTaskStatus;
+      default:
+        return null;
+    }
   }
 }
 

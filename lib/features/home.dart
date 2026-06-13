@@ -14,6 +14,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   int _sessionVersion = 0;
   int _uploadVersion = 0;
+  int _statusVersion = 0;
 
   Future<void> _resetParticipantSession({required bool deletePending}) async {
     if (deletePending) {
@@ -27,6 +28,7 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _sessionVersion += 1;
       _uploadVersion += 1;
+      _statusVersion += 1;
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -76,6 +78,12 @@ class _HomePageState extends State<HomePage> {
           ),
         ),
         const SizedBox(height: 10),
+        SessionStatusCard(
+          key: ValueKey('status-$_statusVersion-$_uploadVersion'),
+          titleStyle: titleStyle,
+          descriptionStyle: descriptionStyle,
+        ),
+        const SizedBox(height: 10),
         NewSessionCard(
           titleStyle: titleStyle,
           descriptionStyle: descriptionStyle,
@@ -86,11 +94,176 @@ class _HomePageState extends State<HomePage> {
           key: ValueKey(_sessionVersion),
           titleStyle: titleStyle,
           descriptionStyle: descriptionStyle,
+          onSaved: _refreshStatus,
         ),
         const SizedBox(height: 10),
-        UploadCard(key: ValueKey(_uploadVersion), titleStyle: titleStyle),
+        UploadCard(
+          key: ValueKey(_uploadVersion),
+          titleStyle: titleStyle,
+          onUploaded: _refreshUploadStatus,
+        ),
       ],
     );
+  }
+
+  void _refreshStatus() {
+    setState(() {
+      _statusVersion += 1;
+    });
+  }
+
+  void _refreshUploadStatus() {
+    setState(() {
+      _statusVersion += 1;
+      _uploadVersion += 1;
+    });
+  }
+}
+
+class SessionStatusCard extends StatefulWidget {
+  const SessionStatusCard({
+    super.key,
+    required this.titleStyle,
+    required this.descriptionStyle,
+  });
+
+  final TextStyle titleStyle;
+  final TextStyle descriptionStyle;
+
+  @override
+  State<SessionStatusCard> createState() => _SessionStatusCardState();
+}
+
+class _SessionStatusCardState extends State<SessionStatusCard> {
+  ParticipantMetadata? metadata;
+  String? sessionId;
+  int pendingCount = 0;
+  Map<String, String> taskStatuses = const {
+    'clock': 'notStarted',
+    'cube': 'notStarted',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStatus();
+  }
+
+  Future<void> _loadStatus() async {
+    final loadedMetadata = await ParticipantMetadata.load();
+    final loadedSessionId = await StorageUtils.loadString(
+      StorageKeys.sessionId,
+    );
+    final pendingPaths = await StorageUtils.checkDownloadsDir();
+    final loadedTaskStatuses = await StorageUtils.loadTaskStatuses();
+
+    if (!mounted) return;
+    setState(() {
+      metadata = loadedMetadata;
+      sessionId = loadedSessionId;
+      pendingCount = pendingPaths.length;
+      taskStatuses = loadedTaskStatuses;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentMetadata = metadata;
+    final confirmed = currentMetadata?.isComplete ?? false;
+
+    return Card(
+      margin: const EdgeInsets.all(8),
+      child: ListTile(
+        title: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Text(
+            'Статус сессии',
+            style: widget.titleStyle,
+            textAlign: TextAlign.center,
+          ),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _StatusLine(
+                label: 'Участник',
+                value:
+                    confirmed
+                        ? '${currentMetadata!.fullName}, ${currentMetadata.age}, ${_sexLabel(currentMetadata.sex)}'
+                        : 'данные не подтверждены',
+              ),
+              _StatusLine(label: 'Сессия', value: sessionId ?? 'не начата'),
+              _StatusLine(
+                label: 'Ожидают загрузки',
+                value: pendingCount.toString(),
+              ),
+              const SizedBox(height: 8),
+              _StatusLine(
+                label: 'Часы',
+                value: _taskStatusLabel(taskStatuses['clock']),
+              ),
+              _StatusLine(
+                label: 'Куб',
+                value: _taskStatusLabel(taskStatuses['cube']),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusLine extends StatelessWidget {
+  const _StatusLine({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 140,
+            child: Text(
+              '$label:',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          Expanded(child: Text(value)),
+        ],
+      ),
+    );
+  }
+}
+
+String _sexLabel(String? sex) {
+  switch (sex) {
+    case 'male':
+      return 'мужчина';
+    case 'female':
+      return 'женщина';
+    default:
+      return 'не указан';
+  }
+}
+
+String _taskStatusLabel(String? status) {
+  switch (status) {
+    case 'uploaded':
+      return 'загружено';
+    case 'pendingUpload':
+      return 'ожидает ручной загрузки';
+    case 'failed':
+      return 'ошибка сохранения';
+    default:
+      return 'не начато';
   }
 }
 
@@ -219,7 +392,12 @@ enum _PendingFileAction { keepFiles, deleteFiles }
 
 class UploadCard extends StatefulWidget {
   final TextStyle titleStyle;
-  const UploadCard({super.key, required this.titleStyle});
+  final VoidCallback onUploaded;
+  const UploadCard({
+    super.key,
+    required this.titleStyle,
+    required this.onUploaded,
+  });
 
   @override
   State<UploadCard> createState() => _UploadCardState();
@@ -227,6 +405,7 @@ class UploadCard extends StatefulWidget {
 
 class _UploadCardState extends State<UploadCard> {
   List<String> paths = [];
+  List<PendingUploadInfo> pendingInfos = [];
   bool _uploaded = false;
   bool _uploading = false;
 
@@ -238,9 +417,11 @@ class _UploadCardState extends State<UploadCard> {
 
   Future<void> _loadPaths() async {
     final result = await StorageUtils.checkDownloadsDir();
+    final infos = await StorageUtils.loadPendingUploadInfo(result);
     if (!mounted) return;
     setState(() {
       paths = result;
+      pendingInfos = infos;
     });
   }
 
@@ -287,6 +468,7 @@ class _UploadCardState extends State<UploadCard> {
       _uploaded = allSuccess;
     });
     await _loadPaths();
+    widget.onUploaded();
     _showUploadStatus();
   }
 
@@ -328,6 +510,19 @@ class _UploadCardState extends State<UploadCard> {
                       ? 'Нет локальных GIF-файлов для загрузки.'
                       : 'Локальных GIF-файлов: ${paths.length}',
                 ),
+                if (pendingInfos.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  ...pendingInfos.take(3).map((info) {
+                    return Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        info.hasSidecar
+                            ? info.displayTitle
+                            : '${info.fileName} - legacy',
+                      ),
+                    );
+                  }),
+                ],
                 const SizedBox(height: 12),
                 ElevatedButton(
                   onPressed: paths.isEmpty ? null : _uploadPendingFiles,
@@ -347,10 +542,12 @@ class InputCard extends StatefulWidget {
     super.key,
     required this.titleStyle,
     required this.descriptionStyle,
+    required this.onSaved,
   });
 
   final TextStyle titleStyle;
   final TextStyle descriptionStyle;
+  final VoidCallback onSaved;
 
   @override
   State<InputCard> createState() => _InputCardState();
@@ -440,6 +637,7 @@ class _InputCardState extends State<InputCard> {
         backgroundColor: Colors.green,
       ),
     );
+    widget.onSaved();
   }
 
   void _showError(String message) {

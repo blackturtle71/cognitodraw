@@ -214,6 +214,14 @@ class _DrawPageState extends State<DrawPage> {
     setState(() {
       _taskState = uploaded ? DrawTaskState.uploaded : DrawTaskState.failed;
     });
+    await StorageUtils.saveTaskStatus(
+      widget.taskType,
+      uploaded
+          ? 'uploaded'
+          : savedLocally
+          ? 'pendingUpload'
+          : 'failed',
+    );
     _showUploadStatus(savedLocally: savedLocally);
     _showThanks();
   }
@@ -434,8 +442,6 @@ class _DrawPageState extends State<DrawPage> {
     );
   }
 }
-
-// have no fucking clue how this works, revisit later
 
 class DrawingArea extends StatefulWidget {
   final Function(List<DrawingStroke>)? onDrawingComplete;
