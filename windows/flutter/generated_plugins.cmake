@@ -3,10 +3,10 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  app_links
   audioplayers_windows
-  file_saver
   permission_handler_windows
+  public_file_saver
+  share_plus
   url_launcher_windows
 )
 

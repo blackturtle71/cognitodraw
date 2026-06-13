@@ -34,8 +34,9 @@ dependencies:
   permission_handler: ^12.0.1
   screen_recorder: ^0.3.0
   shared_preferences: ^2.5.3
-  file_saver: ^0.3.1
   path: ^1.9.1
+  share_plus: ^12.0.1
+  sqflite: ^2.4.2
 
   flutter:
     sdk: flutter
@@ -43,16 +44,15 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
-  supabase_flutter: ^2.0.0
-  flutter_dotenv: ^6.0.0
   translit: ^2.0.2
-  http: ^1.5.0
+  archive: ^4.0.9
+  public_file_saver: ^1.1.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  open_file: ^3.5.10
   flutter_launcher_icons: ^0.14.4
+  sqflite_common_ffi: ^2.3.6
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -78,7 +78,6 @@ flutter:
       - assets/audio/cube_task.mp3
       - assets/images/cube.png
       - assets/images/icon.png
-      - .env
 
 
 

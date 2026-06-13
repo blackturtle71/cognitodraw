@@ -1,18 +1,11 @@
 import 'package:flutter/material.dart';
 import 'features/home.dart';
 import 'features/draw.dart';
+import 'features/records.dart';
 import 'constants/theme.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: '.env');
-  await Supabase.initialize(
-    url: dotenv.env['SUPABASE_URL']!,
-    anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
-  );
-
   runApp(const MyApp());
 }
 
@@ -66,11 +59,16 @@ class _NavBarState extends State<NavBar> {
           NavigationDestination(
             selectedIcon: Icon(Icons.draw),
             icon: Icon(Icons.draw_outlined),
-            label: 'Страница с заданиями',
+            label: 'Задания',
+          ),
+          NavigationDestination(
+            selectedIcon: Icon(Icons.table_chart),
+            icon: Icon(Icons.table_chart_outlined),
+            label: 'Данные',
           ),
         ],
       ),
-      body: <Widget>[HomePage(), DrawMenu()][curPageIndex],
+      body: <Widget>[HomePage(), DrawMenu(), RecordsPage()][curPageIndex],
     );
   }
 }

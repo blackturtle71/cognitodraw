@@ -2,13 +2,13 @@
 
 Cognitodraw is a Flutter application for collecting drawing-task data for cognitive impairment screening workflows. It is currently optimized for a controlled Android/tablet pilot where one device can be used by multiple participants.
 
-The app collects participant metadata, presents Russian clock and cube drawing tasks, records the drawing interaction as a GIF, and uploads the GIF plus metadata to Supabase. If upload fails, the app attempts to keep the exported GIF locally for manual upload.
+The app collects participant metadata, presents Russian clock and cube drawing tasks, records the drawing interaction as a GIF, and stores both the GIF and metadata locally on the Android device for offline use.
 
 ## Current Features
 
 - Participant metadata form: full name, age, sex, and optional complaints.
 - Explicit new-participant session reset for shared-device use.
-- Home-screen session status: participant metadata, session ID, task status, and pending upload count.
+- Home-screen session status: participant metadata, session ID, task status, and saved record count.
 - Two drawing tasks:
   - Clock drawing task.
   - Cube copying task with a reference image.
@@ -16,10 +16,9 @@ The app collects participant metadata, presents Russian clock and cube drawing t
 - Canvas reset tracking through the `repeatTaps` metadata field.
 - Time-to-complete tracking for each drawing task.
 - GIF export of the recorded drawing session.
-- Supabase upload for GIF files and participant metadata.
-- Local fallback for failed uploads, with manual upload from the home screen.
-- Pending local GIFs are kept across new participant sessions unless the operator explicitly deletes them.
-- Pending local GIFs created by current builds have a JSON sidecar with the original participant and task metadata.
+- Local SQLite database with one row per drawing attempt.
+- App-managed GIF storage on the device.
+- Data screen for viewing/editing records, sharing/saving CSV, and sharing/saving GIF ZIP archives.
 
 ## Tech Stack
 
@@ -28,20 +27,26 @@ The app collects participant metadata, presents Russian clock and cube drawing t
 - `screen_recorder` for GIF capture.
 - `audioplayers` for task audio prompts.
 - `shared_preferences` for temporary participant/session metadata.
-- `path_provider` for pending GIF storage access.
-- `supabase_flutter` for metadata and file upload.
+- `path_provider` for local GIF, database, and export paths.
+- `sqflite` for the local records database.
+- `share_plus` for CSV/ZIP export through Android share UI.
+- `public_file_saver` for saving CSV/ZIP files to public Downloads.
 
 ## Project Layout
 
 ```text
 lib/
-  main.dart                  App bootstrap, Supabase initialization, routes, bottom navigation.
+  main.dart                  App bootstrap, routes, bottom navigation.
+  data/
+    local_records_repository.dart
+                               SQLite records, GIF storage, CSV export.
   features/
-    home.dart                User guide, session status, new-session reset, participant form, manual upload UI.
+    home.dart                User guide, session status, new-session reset, participant form.
     draw.dart                Task menu, drawing screens, recording/export flow.
+    records.dart             Local database viewer/editor and CSV/ZIP export UI.
     settings.dart            Placeholder settings screen.
   utils/
-    utils.dart               Storage keys, metadata model, Supabase upload, pending files, drawing painter, dialogs, audio button.
+    utils.dart               Storage keys, metadata model, drawing painter, dialogs, audio button.
   constants/
     text_constants.dart      Russian UI/task copy.
     theme.dart               Material color schemes.
@@ -57,33 +62,29 @@ assets/
 
 Platform folders are present for Android, iOS, Linux, macOS, Windows, and web. The active pilot target is Android/tablet.
 
-## Supabase Setup
+## Local Data
 
-The app loads Supabase configuration from a root `.env` file. This file is ignored by git and must exist before running the app:
+Records are stored in an on-device SQLite database named `cognitodraw.sqlite`.
+GIF files are stored in the app documents directory under `gifs/`.
 
-```env
-SUPABASE_URL=your-project-url
-SUPABASE_ANON_KEY=your-anon-key
-```
-
-The upload code expects:
-
-- A storage bucket named `gif_storage`.
-- A table named `user_meta`.
-
-See `docs/supabase.md` for the current client-side upload contract, filename format, pending-upload sidecar format, and future schema recommendations.
-
-The `user_meta` upsert payload includes:
+CSV export includes:
 
 ```text
+id
 fullName
 age
 sex
-filename
+complaint
+taskType
+sessionId
+attemptId
+fileName
+gifPath
 timeToComplete
 repeatTaps
-complaint
 comment
+createdAt
+updatedAt
 ```
 
 ## Getting Started
@@ -118,39 +119,30 @@ Before a pilot session:
 
 1. Install a build on the target Android tablet.
 2. Confirm the app is named `Cognitodraw` on the launcher.
-3. Confirm `.env` points at the intended Supabase project.
-4. Confirm the `gif_storage` bucket and `user_meta` table exist.
-5. Confirm the tablet has network access.
+3. Confirm the app opens without network access.
+4. Open `Данные` and confirm the local database screen is available.
 
 For each participant:
 
 1. On the home screen, press `НАЧАТЬ НОВУЮ СЕССИЮ`.
-2. If the app reports pending local GIF files, upload them first or explicitly choose whether to keep/delete them.
-3. Enter participant metadata and press `ПОДТВЕРДИТЬ`.
-4. Check `Статус сессии` to confirm the participant and task state.
-5. Open the drawing tab and choose `Часы` or `Куб`.
-6. Press `Начать`, complete the task, then press `Завершить`.
-7. Confirm the app reports successful upload or local fallback.
+2. Enter participant metadata and press `ПОДТВЕРДИТЬ`.
+3. Check `Статус сессии` to confirm the participant and task state.
+4. Open the drawing tab and choose `Часы` or `Куб`.
+5. Press `Начать`, complete the task, then press `Завершить`.
+6. Confirm the app reports successful local save.
+7. Open `Данные` to view/edit records, export/save CSV, or export/save GIF ZIP archives.
 8. Before handing the tablet to the next participant, return to step 1.
-
-Manual upload procedure:
-
-1. Open the home screen.
-2. Use `Загрузить данные вручную`.
-3. If upload succeeds, the local pending GIF files are deleted.
-4. If upload fails, keep the files and retry when network/server access is restored.
 
 ## Data Flow
 
-1. On startup, the app loads `.env` and initializes Supabase. It does not clear participant data automatically.
+1. On startup, the app initializes local UI state. It does not clear participant data automatically.
 2. The operator starts a new participant session from the home screen.
-3. The app clears participant metadata and task state. Pending GIF files are preserved unless the operator chooses deletion.
+3. The app clears current participant metadata and task state. Historical SQLite records are preserved.
 4. The participant metadata form must be confirmed before drawing can start.
 5. Pressing `Начать` starts the timer and screen recorder.
 6. Pressing `Начать заново` clears the canvas and increments `repeatTaps`.
-7. Pressing `Завершить` stops recording, exports a GIF, and attempts upload.
-8. If upload succeeds, metadata is written to `user_meta` and the GIF is stored in `gif_storage`.
-9. If upload fails, the GIF is saved locally when the platform provides a downloads directory.
+7. Pressing `Завершить` stops recording, exports a GIF, writes the GIF into app storage, and inserts a SQLite record.
+8. The `Данные` tab lists saved records, allows full-field edits, and can share/save CSV plus GIF ZIP archives.
 
 ## Notes for Development
 

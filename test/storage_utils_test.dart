@@ -1,6 +1,3 @@
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:cognitodraw/utils/utils.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -48,7 +45,7 @@ void main() {
   });
 
   test(
-    'clearing participant session preserves unrelated and pending-file preferences',
+    'clearing participant session preserves unrelated preferences',
     () async {
       SharedPreferences.setMockInitialValues({
         StorageKeys.fullName: 'Иван Иванов',
@@ -57,7 +54,6 @@ void main() {
         StorageKeys.repeatTaps: 2,
         StorageKeys.sessionId: 's_existing',
         'operatorPreference': 'keep',
-        'pendingGifPath': '/tmp/pending.gif',
       });
 
       await StorageUtils.clearParticipantSession();
@@ -69,7 +65,6 @@ void main() {
       expect(prefs.getInt(StorageKeys.repeatTaps), isNull);
       expect(prefs.getString(StorageKeys.sessionId), isNull);
       expect(prefs.getString('operatorPreference'), 'keep');
-      expect(prefs.getString('pendingGifPath'), '/tmp/pending.gif');
     },
   );
 
@@ -88,18 +83,6 @@ void main() {
       expect(prefs.getString(StorageKeys.fullName), isNull);
       expect(prefs.getString(StorageKeys.sessionId), sessionId);
     },
-  );
-
-  test(
-    'pending GIF storage gracefully reports unsupported test platform',
-    () async {
-      final available = await StorageUtils.canUsePendingGifStorage();
-      final saved = await StorageUtils.savePendingGif([1, 2, 3], 'test.gif');
-
-      expect(available, isFalse);
-      expect(saved, isFalse);
-    },
-    skip: !Platform.isLinux,
   );
 
   test('GIF filenames include user name, task, session, and attempt id', () {
@@ -121,7 +104,7 @@ void main() {
     expect(fileName, isNot(contains(' ')));
   });
 
-  test('attempt snapshot round trips and keeps existing Supabase columns', () {
+  test('attempt snapshot round trips local record metadata', () {
     const snapshot = DrawingAttemptSnapshot(
       metadata: ParticipantMetadata(
         fullName: 'Иван Иванов',
@@ -143,68 +126,19 @@ void main() {
     expect(restored.fileName, snapshot.fileName);
     expect(restored.sessionId, snapshot.sessionId);
     expect(restored.attemptId, snapshot.attemptId);
-    expect(restored.supabasePayload.keys, {
-      'fullName',
-      'age',
-      'sex',
-      'filename',
-      'timeToComplete',
-      'repeatTaps',
-      'complaint',
-      'comment',
-    });
+    expect(restored.metadata.fullName, 'Иван Иванов');
+    expect(restored.timeToComplete, 10);
   });
 
   test('task statuses default and persist per task', () async {
     expect(await StorageUtils.loadTaskStatus('clock'), 'notStarted');
 
-    await StorageUtils.saveTaskStatus('clock', 'uploaded');
-    await StorageUtils.saveTaskStatus('cube', 'pendingUpload');
+    await StorageUtils.saveTaskStatus('clock', 'saved');
+    await StorageUtils.saveTaskStatus('cube', 'failed');
 
     final statuses = await StorageUtils.loadTaskStatuses();
 
-    expect(statuses['clock'], 'uploaded');
-    expect(statuses['cube'], 'pendingUpload');
-  });
-
-  test('pending upload info uses sidecar metadata when available', () async {
-    final directory = await Directory.systemTemp.createTemp(
-      'cognitodraw_test_',
-    );
-    addTearDown(() async {
-      if (await directory.exists()) {
-        await directory.delete(recursive: true);
-      }
-    });
-
-    final gif = File('${directory.path}/Ivan_clock_s_1_a_1.gif');
-    await gif.writeAsBytes([1, 2, 3]);
-    final sidecar = File('${directory.path}/Ivan_clock_s_1_a_1.json');
-    await sidecar.writeAsString(
-      jsonEncode(
-        const DrawingAttemptSnapshot(
-          metadata: ParticipantMetadata(
-            fullName: 'Иван Иванов',
-            age: 72,
-            sex: 'male',
-            complaint: '',
-          ),
-          taskType: 'clock',
-          sessionId: 's_1',
-          attemptId: 'a_1',
-          fileName: 'Ivan_clock_s_1_a_1.gif',
-          timeToComplete: 20,
-          repeatTaps: 0,
-          createdAt: '2026-05-18T12:00:00.000Z',
-        ).toJson(),
-      ),
-    );
-
-    final infos = await StorageUtils.loadPendingUploadInfo([gif.path]);
-
-    expect(infos, hasLength(1));
-    expect(infos.single.participantName, 'Иван Иванов');
-    expect(infos.single.taskType, 'clock');
-    expect(infos.single.hasSidecar, isTrue);
+    expect(statuses['clock'], 'saved');
+    expect(statuses['cube'], 'failed');
   });
 }

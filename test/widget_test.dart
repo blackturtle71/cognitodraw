@@ -21,6 +21,7 @@ void main() {
     );
     expect(find.text('Статус сессии'), findsOneWidget);
     expect(find.text('данные не подтверждены'), findsOneWidget);
+    expect(find.text('Сохранено записей:'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('Новая сессия участника'),
       300,
@@ -33,12 +34,6 @@ void main() {
       scrollable: scrollable,
     );
     expect(find.text('Введите свои данные'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.text('Загрузить данные вручную'),
-      300,
-      scrollable: scrollable,
-    );
-    expect(find.text('Загрузить данные вручную'), findsOneWidget);
-    expect(find.text('Нет локальных GIF-файлов для загрузки.'), findsOneWidget);
+    expect(find.text('Данные'), findsOneWidget);
   });
 }

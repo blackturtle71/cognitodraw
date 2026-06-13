@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:screen_recorder/screen_recorder.dart';
 
+import '../data/local_records_repository.dart';
 import '../utils/utils.dart';
 import '../constants/text_constants.dart';
 
@@ -54,7 +55,7 @@ class DrawMenu extends StatelessWidget {
   }
 }
 
-enum DrawTaskState { idle, recording, exporting, uploaded, failed }
+enum DrawTaskState { idle, recording, exporting, saved, failed }
 
 class DrawPage extends StatefulWidget {
   final String taskType;
@@ -67,6 +68,7 @@ class DrawPage extends StatefulWidget {
 class _DrawPageState extends State<DrawPage> {
   DrawTaskState _taskState = DrawTaskState.idle;
   ScreenRecorderController controller = ScreenRecorderController();
+  final LocalRecordsRepository _recordsRepository = LocalRecordsRepository();
   bool get canExport => controller.exporter.hasFrames;
   bool get _exporting => _taskState == DrawTaskState.exporting;
 
@@ -76,20 +78,18 @@ class _DrawPageState extends State<DrawPage> {
     _drawingAreaKey.currentState?.clearCanvas();
   }
 
-  void _showUploadStatus({required bool savedLocally}) {
+  void _showSaveStatus() {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Center(
           child: Text(
-            _taskState == DrawTaskState.uploaded
-                ? 'Файл успешно сохранён'
-                : savedLocally
-                ? 'Ошибка соединения с сервером. GIF сохранён локально'
-                : 'Не удалось загрузить или сохранить GIF локально',
+            _taskState == DrawTaskState.saved
+                ? 'Файл и запись успешно сохранены на устройстве'
+                : 'Не удалось сохранить GIF или запись на устройстве',
           ),
         ),
         backgroundColor:
-            _taskState == DrawTaskState.uploaded ? Colors.green : Colors.red,
+            _taskState == DrawTaskState.saved ? Colors.green : Colors.red,
       ),
     );
   }
@@ -179,7 +179,7 @@ class _DrawPageState extends State<DrawPage> {
       setState(() {
         _taskState = DrawTaskState.failed;
       });
-      _showUploadStatus(savedLocally: false);
+      _showSaveStatus();
       return;
     }
 
@@ -193,7 +193,7 @@ class _DrawPageState extends State<DrawPage> {
       setState(() {
         _taskState = DrawTaskState.failed;
       });
-      _showUploadStatus(savedLocally: false);
+      _showSaveStatus();
       return;
     }
 
@@ -203,26 +203,23 @@ class _DrawPageState extends State<DrawPage> {
       repeatTaps: repeatTaps,
     );
 
-    final uploaded = await StorageUtils.uploadAttempt(gif, snapshot);
-    var savedLocally = false;
-
-    if (!uploaded) {
-      savedLocally = await StorageUtils.savePendingAttempt(gif, snapshot);
+    var saved = false;
+    try {
+      await _recordsRepository.saveAttempt(gif, snapshot);
+      saved = true;
+    } catch (_) {
+      saved = false;
     }
 
     if (!mounted) return;
     setState(() {
-      _taskState = uploaded ? DrawTaskState.uploaded : DrawTaskState.failed;
+      _taskState = saved ? DrawTaskState.saved : DrawTaskState.failed;
     });
     await StorageUtils.saveTaskStatus(
       widget.taskType,
-      uploaded
-          ? 'uploaded'
-          : savedLocally
-          ? 'pendingUpload'
-          : 'failed',
+      saved ? 'saved' : 'failed',
     );
-    _showUploadStatus(savedLocally: savedLocally);
+    _showSaveStatus();
     _showThanks();
   }
 
