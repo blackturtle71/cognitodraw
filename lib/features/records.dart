@@ -180,6 +180,47 @@ class _RecordsPageState extends State<RecordsPage> {
     _showMessage('Запись обновлена', success: true);
   }
 
+  Future<void> _deleteRecord(DrawingRecord record) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Удалить запись?'),
+            content: const Text(
+              'Запись будет удалена из локальной базы данных вместе с GIF-файлом.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Отмена'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                  foregroundColor: Theme.of(context).colorScheme.onError,
+                ),
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Удалить'),
+              ),
+            ],
+          ),
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    try {
+      await _repository.deleteRecord(record);
+      await _loadRecords();
+      if (!mounted) return;
+      _showMessage('Запись удалена', success: true);
+    } catch (_) {
+      if (!mounted) return;
+      _showMessage('Не удалось удалить запись', success: false);
+    }
+  }
+
   void _showMessage(String message, {required bool success}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -263,6 +304,7 @@ class _RecordsPageState extends State<RecordsPage> {
                       return _RecordTile(
                         record: record,
                         onEdit: () => _editRecord(record),
+                        onDelete: () => _deleteRecord(record),
                         onShareGif: () => _shareGif(record),
                       );
                     },
@@ -305,11 +347,13 @@ class _RecordTile extends StatelessWidget {
   const _RecordTile({
     required this.record,
     required this.onEdit,
+    required this.onDelete,
     required this.onShareGif,
   });
 
   final DrawingRecord record;
   final VoidCallback onEdit;
+  final VoidCallback onDelete;
   final VoidCallback onShareGif;
 
   @override
@@ -348,6 +392,12 @@ class _RecordTile extends StatelessWidget {
               tooltip: 'Редактировать',
               onPressed: onEdit,
               icon: const Icon(Icons.edit),
+            ),
+            IconButton(
+              tooltip: 'Удалить',
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline),
+              color: Theme.of(context).colorScheme.error,
             ),
           ],
         ),

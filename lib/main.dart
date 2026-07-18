@@ -54,7 +54,7 @@ class _NavBarState extends State<NavBar> {
           NavigationDestination(
             selectedIcon: Icon(Icons.home),
             icon: Icon(Icons.home_outlined),
-            label: 'Домашняя страница',
+            label: 'Профиль',
           ),
           NavigationDestination(
             selectedIcon: Icon(Icons.draw),

@@ -256,6 +256,11 @@ class LocalRecordsRepository {
       return;
     }
 
+    final gifFile = File(record.gifPath);
+    if (await gifFile.exists()) {
+      await gifFile.delete();
+    }
+
     final db = await _db;
     await db.delete(tableName, where: 'id = ?', whereArgs: [id]);
   }

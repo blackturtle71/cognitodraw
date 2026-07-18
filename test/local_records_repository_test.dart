@@ -85,6 +85,35 @@ void main() {
     expect(records.single.comment, 'ok');
   });
 
+  test('deletes a record row and gif file', () async {
+    const snapshot = DrawingAttemptSnapshot(
+      metadata: ParticipantMetadata(
+        fullName: 'Иван',
+        age: 70,
+        sex: 'male',
+        complaint: '',
+      ),
+      taskType: 'cube',
+      sessionId: 's_delete',
+      attemptId: 'a_delete',
+      fileName: 'Ivan_cube_s_delete_a_delete.gif',
+      timeToComplete: 15,
+      repeatTaps: 0,
+      createdAt: '2026-05-18T12:00:00.000Z',
+    );
+
+    final record = await repository.saveAttempt([1, 2, 3], snapshot);
+    final gifFile = File(record.gifPath);
+
+    expect(await repository.recordCount(), 1);
+    expect(await gifFile.exists(), isTrue);
+
+    await repository.deleteRecord(record);
+
+    expect(await repository.recordCount(), 0);
+    expect(await gifFile.exists(), isFalse);
+  });
+
   test('exports csv with escaped values', () async {
     const snapshot = DrawingAttemptSnapshot(
       metadata: ParticipantMetadata(
