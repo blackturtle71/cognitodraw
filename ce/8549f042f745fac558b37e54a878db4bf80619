@@ -1,0 +1,24 @@
+android/app/proguard-rules.pro
+  s_5b28d2ab8b6fe6::t_4fb17dc2ff5ac8 1-3
+android/app/src/main/AndroidManifest.xml
+  s_5b28d2ab8b6fe6::t_c164901f24b03b 1-2,7-10
+android/app/build.gradle.kts
+  s_5b28d2ab8b6fe6::t_4fb17dc2ff5ac8 33
+  s_5b28d2ab8b6fe6::t_f28fd661515636 28,39-49,55-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ce8549f042f745fac558b37e54a878db4bf80619",
+  "prompts": {},
+  "sessions": {
+    "s_5b28d2ab8b6fe6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17c91-c377-7750-8988-9b88d83a83b5",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "blackturtle71 <glebosadchiy71@gmail.com>"
+    }
+  }
+}
