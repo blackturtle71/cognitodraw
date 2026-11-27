@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:screen_recorder/screen_recorder.dart';
@@ -111,6 +113,9 @@ class _DrawPageState extends State<DrawPage> {
   int repeatTaps = 0;
 
   final Stopwatch _stopwatch = Stopwatch();
+  List<int>? _pendingGif;
+  Uint8List? _pendingFinalImage;
+  DrawingAttemptSnapshot? _pendingSnapshot;
 
   @override
   void initState() {
@@ -168,59 +173,57 @@ class _DrawPageState extends State<DrawPage> {
   }
 
   Future<void> _finishDrawing() async {
-    setState(() {
-      isDrawing = false;
-    });
-    final timeToComplete = await _stopTimer();
-    _clearCanvas();
-    controller.stop();
-
-    if (!canExport || _exporting) {
+    if (_exporting) return;
+    try {
+      if (_pendingFinalImage == null) {
+        final timeToComplete = await _stopTimer();
+        if (!mounted) return;
+        setState(() {
+          isDrawing = false;
+        });
+        _pendingFinalImage = await _drawingAreaKey.currentState!
+            .captureFinalImage(widget.taskType);
+        controller.stop();
+        _pendingSnapshot = await StorageUtils.buildAttemptSnapshot(
+          taskType: widget.taskType,
+          timeToComplete: timeToComplete,
+          repeatTaps: repeatTaps,
+        );
+      }
+      if (!mounted) return;
       setState(() {
-        _taskState = DrawTaskState.failed;
+        _taskState = DrawTaskState.exporting;
       });
+      _pendingGif ??= await controller.exporter.exportGif();
+      if (_pendingGif == null || _pendingSnapshot == null) {
+        throw StateError('Нет завершённой записи');
+      }
+      await _recordsRepository.saveAttempt(
+        _pendingGif!,
+        _pendingSnapshot!,
+        finalImage: _pendingFinalImage,
+        captureVersion: 'canonical-v1',
+      );
+      if (!mounted) return;
+      _clearCanvas();
+      _pendingGif = null;
+      _pendingFinalImage = null;
+      _pendingSnapshot = null;
+      setState(() {
+        _taskState = DrawTaskState.saved;
+      });
+      await StorageUtils.saveTaskStatus(widget.taskType, 'saved');
+      if (!mounted) return;
       _showSaveStatus();
-      return;
-    }
-
-    setState(() {
-      _taskState = DrawTaskState.exporting;
-    });
-
-    final gif = await controller.exporter.exportGif();
-    if (gif == null) {
+      _showThanks();
+    } catch (_) {
       if (!mounted) return;
       setState(() {
         _taskState = DrawTaskState.failed;
       });
-      _showSaveStatus();
-      return;
+      await StorageUtils.saveTaskStatus(widget.taskType, 'failed');
+      if (mounted) _showSaveStatus();
     }
-
-    final snapshot = await StorageUtils.buildAttemptSnapshot(
-      taskType: widget.taskType,
-      timeToComplete: timeToComplete,
-      repeatTaps: repeatTaps,
-    );
-
-    var saved = false;
-    try {
-      await _recordsRepository.saveAttempt(gif, snapshot);
-      saved = true;
-    } catch (_) {
-      saved = false;
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _taskState = saved ? DrawTaskState.saved : DrawTaskState.failed;
-    });
-    await StorageUtils.saveTaskStatus(
-      widget.taskType,
-      saved ? 'saved' : 'failed',
-    );
-    _showSaveStatus();
-    _showThanks();
   }
 
   @override
@@ -308,6 +311,10 @@ class _DrawPageState extends State<DrawPage> {
                       child: FloatingActionButton.extended(
                         heroTag: null,
                         onPressed: () {
+                          if (_pendingFinalImage != null) {
+                            _finishDrawing();
+                            return;
+                          }
                           if (isDrawing) {
                             showDialog(
                               context: context,
@@ -374,7 +381,13 @@ class _DrawPageState extends State<DrawPage> {
                             );
                           }
                         },
-                        label: isDrawing ? Text('Завершить') : Text('Начать'),
+                        label: Text(
+                          _pendingFinalImage != null
+                              ? 'Повторить сохранение'
+                              : isDrawing
+                              ? 'Завершить'
+                              : 'Начать',
+                        ),
                       ),
                     ),
                     if (isDrawing)
@@ -399,40 +412,29 @@ class _DrawPageState extends State<DrawPage> {
         body: Column(
           // for the cube task there should be a picture of a cube as well
           children: [
-            if (_exporting)
-              Expanded(
-                child: Container(
-                  decoration: BoxDecoration(color: Colors.yellow[50]),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Padding(
-                        padding: EdgeInsets.all(8.0),
-                        child: Text(
-                          'Идёт процесс сохранения. Не закрывайте приложение и не покидайте страницу!',
-                          style: titleStyle,
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                      SizedBox(height: 25),
-                      CircularProgressIndicator(),
-                    ],
+            if (widget.taskType == 'cube')
+              Container(
+                color: Colors.white,
+                alignment: Alignment.center,
+                child: Image.asset('assets/images/cube.png', height: 150),
+              ),
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  DrawingArea(
+                    key: _drawingAreaKey,
+                    taskType: widget.taskType,
+                    enabled: isDrawing && !_exporting,
                   ),
-                ),
-              )
-            else ...[
-              if (widget.taskType == 'cube')
-                Container(
-                  decoration: BoxDecoration(color: Colors.white),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Image.asset('assets/images/cube.png', height: 150),
-                    ],
-                  ),
-                ),
-              Expanded(child: DrawingArea(key: _drawingAreaKey)),
-            ],
+                  if (_exporting)
+                    const ColoredBox(
+                      color: Color(0xFFFFFDE7),
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -443,7 +445,15 @@ class _DrawPageState extends State<DrawPage> {
 class DrawingArea extends StatefulWidget {
   final Function(List<DrawingStroke>)? onDrawingComplete;
 
-  const DrawingArea({super.key, this.onDrawingComplete});
+  final String taskType;
+  final bool enabled;
+
+  const DrawingArea({
+    super.key,
+    this.onDrawingComplete,
+    required this.taskType,
+    this.enabled = true,
+  });
 
   @override
   State<DrawingArea> createState() => _DrawingAreaState();
@@ -467,84 +477,127 @@ class _DrawingAreaState extends State<DrawingArea> {
     });
   }
 
+  Future<Uint8List> captureFinalImage(String task) async {
+    // Геометрия взята из PREPROCESSING сохранённого набора обучения.
+    final top = task == 'clock' ? 57.0 : 115.0;
+    final height = task == 'clock' ? 490.0 : 432.0;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.drawColor(const Color(0xFFFFFDE7), BlendMode.src);
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(0, top, 342, height));
+    canvas.translate(0, top);
+    Sketcher(
+      lines: _lines,
+      currentLine: _currentLine,
+      color: _selectedColor,
+      strokeWidth: _strokeWidth,
+    ).paint(canvas, Size(342, height));
+    canvas.restore();
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(343, 548);
+    try {
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (bytes == null) {
+        throw StateError('Не удалось сохранить финальный рисунок');
+      }
+      return bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes);
+    } finally {
+      image.dispose();
+      picture.dispose();
+    }
+  }
+
   Duration _getCurrentDuration() {
     return DateTime.now().difference(_drawingStartTime ?? DateTime.now());
   }
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return GestureDetector(
-          onPanUpdate: (details) {
-            final RenderBox renderBox =
-                _drawingAreaKey.currentContext?.findRenderObject() as RenderBox;
-            final localPosition = renderBox.globalToLocal(
-              details.globalPosition,
-            );
-
-            if (localPosition.dx >= 0 &&
-                localPosition.dy >= 0 &&
-                localPosition.dx <= renderBox.size.width &&
-                localPosition.dy <= renderBox.size.height) {
-              setState(() {
-                _currentLine.add(localPosition);
-                _currentTimestamps.add(_getCurrentDuration());
-              });
-            }
-          },
-          onPanStart: (details) {
-            _drawingStartTime ??= DateTime.now();
-
-            final RenderBox renderBox =
-                _drawingAreaKey.currentContext?.findRenderObject() as RenderBox;
-            final localPosition = renderBox.globalToLocal(
-              details.globalPosition,
-            );
-
-            if (localPosition.dx >= 0 &&
-                localPosition.dy >= 0 &&
-                localPosition.dx <= renderBox.size.width &&
-                localPosition.dy <= renderBox.size.height) {
-              setState(() {
-                _currentLine = [localPosition];
-                _currentTimestamps = [_getCurrentDuration()];
-              });
-            }
-          },
-          onPanEnd: (details) {
-            setState(() {
-              if (_currentLine.isNotEmpty) {
-                final newStroke = DrawingStroke(
-                  points: List.from(_currentLine),
-                  color: _selectedColor,
-                  strokeWidth: _strokeWidth,
-                  timestamps: List.from(_currentTimestamps),
+    final height = widget.taskType == 'clock' ? 490.0 : 432.0;
+    return ColoredBox(
+      color: const Color(0xFFFFFDE7),
+      child: FittedBox(
+        fit: BoxFit.contain,
+        child: SizedBox(
+          width: 342,
+          height: height,
+          child: IgnorePointer(
+            ignoring: !widget.enabled,
+            child: GestureDetector(
+              onPanUpdate: (details) {
+                final RenderBox renderBox =
+                    _drawingAreaKey.currentContext?.findRenderObject()
+                        as RenderBox;
+                final localPosition = renderBox.globalToLocal(
+                  details.globalPosition,
                 );
-                _lines.add(newStroke);
-                _currentLine = [];
-                _currentTimestamps = [];
 
-                // Notify parent about the complete drawing
-                widget.onDrawingComplete?.call(_lines);
-              }
-            });
-          },
-          child: Container(
-            key: _drawingAreaKey,
-            decoration: BoxDecoration(color: Colors.yellow[50]),
-            child: CustomPaint(
-              painter: Sketcher(
-                lines: _lines,
-                currentLine: _currentLine,
-                color: _selectedColor,
-                strokeWidth: _strokeWidth,
+                if (localPosition.dx >= 0 &&
+                    localPosition.dy >= 0 &&
+                    localPosition.dx <= renderBox.size.width &&
+                    localPosition.dy <= renderBox.size.height) {
+                  setState(() {
+                    _currentLine.add(localPosition);
+                    _currentTimestamps.add(_getCurrentDuration());
+                  });
+                }
+              },
+              onPanStart: (details) {
+                _drawingStartTime ??= DateTime.now();
+
+                final RenderBox renderBox =
+                    _drawingAreaKey.currentContext?.findRenderObject()
+                        as RenderBox;
+                final localPosition = renderBox.globalToLocal(
+                  details.globalPosition,
+                );
+
+                if (localPosition.dx >= 0 &&
+                    localPosition.dy >= 0 &&
+                    localPosition.dx <= renderBox.size.width &&
+                    localPosition.dy <= renderBox.size.height) {
+                  setState(() {
+                    _currentLine = [localPosition];
+                    _currentTimestamps = [_getCurrentDuration()];
+                  });
+                }
+              },
+              onPanEnd: (details) {
+                setState(() {
+                  if (_currentLine.isNotEmpty) {
+                    final newStroke = DrawingStroke(
+                      points: List.from(_currentLine),
+                      color: _selectedColor,
+                      strokeWidth: _strokeWidth,
+                      timestamps: List.from(_currentTimestamps),
+                    );
+                    _lines.add(newStroke);
+                    _currentLine = [];
+                    _currentTimestamps = [];
+
+                    // Notify parent about the complete drawing
+                    widget.onDrawingComplete?.call(_lines);
+                  }
+                });
+              },
+              child: Container(
+                key: _drawingAreaKey,
+                decoration: BoxDecoration(color: Colors.yellow[50]),
+                child: CustomPaint(
+                  painter: Sketcher(
+                    lines: _lines,
+                    currentLine: _currentLine,
+                    color: _selectedColor,
+                    strokeWidth: _strokeWidth,
+                  ),
+                  size: Size(342, height),
+                ),
               ),
-              size: Size(constraints.maxWidth, constraints.maxHeight),
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }

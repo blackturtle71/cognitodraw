@@ -20,7 +20,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('GIF'), findsOneWidget);
+    expect(find.text('Рисунки (GIF и PNG)'), findsOneWidget);
     expect(find.text('CSV'), findsOneWidget);
     expect(find.text('Отправить ZIP'), findsOneWidget);
     expect(find.text('Сохранить ZIP'), findsOneWidget);

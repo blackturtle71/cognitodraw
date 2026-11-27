@@ -44,3 +44,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Генерируется командой export-mobile в соседнем проекте моделей.
+/assets/models/dinov2/

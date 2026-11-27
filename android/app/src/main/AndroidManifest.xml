@@ -1,8 +1,13 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <application
         android:label="Cognitodraw"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- Нативный движок загружается при оценке рисунка, без стартовой телеметрии ORT. -->
+        <provider
+            android:name="ai.onnxruntime.TelemetryInitializer"
+            tools:node="remove" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

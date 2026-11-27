@@ -153,3 +153,84 @@ For each participant:
 - The old misspelled complaint key `comlpaint` is read once and migrated to `complaint`.
 - Android release builds still use debug signing for the controlled pilot; replace signing before production distribution.
 - `flutter analyze` and `flutter test` should pass before installing a pilot build.
+
+## Offline model assessments
+
+The Android app bundles one DINOv2 ViT-S/14 encoder and separate clock/cube classifiers.
+On `Данные`, press `Оценить рисунок` to run an assessment locally. The app displays the
+binary assessment and an uncalibrated model score, saves the result, and includes it in
+CSV export. No drawing or participant data is uploaded. ONNX Runtime telemetry is disabled.
+The labels were learned from narrative drawing assessments, not confirmed diagnoses;
+the result is experimental. The clock model has weaker measured performance.
+
+New drawings use a canvas with the training proportions, independent of phone dimensions.
+Completion saves a canonical 343×548 final PNG before clearing the canvas, alongside the
+GIF. Failed saves retain their pending image and can be retried. Older GIF-only records
+can be assessed only when their last composited frame matches the original 343×548 format.
+The original training masks and Pillow-compatible resize are applied to both input types.
+
+Database version 2 preserves existing attempts and adds final-image/capture metadata
+plus a separate `model_assessments` table. Results include model/preprocessing versions,
+input fingerprint, and assessment time. Editing model inputs clears the assessment;
+editing names, comments, or complaints does not. A changed bundled model makes older
+assessments outdated until manually rerun. CSV appends `modelLabel`, `modelScore`,
+`modelVersion`, `modelPreprocessingVersion`, `modelInputFingerprint`, `modelAssessedAt`,
+and `modelAssessmentStatus`, as well as `finalImageFileName` and `captureVersion`.
+A model prediction never populates a human training `label`. Drawing ZIP exports now
+include canonical PNGs alongside GIFs; individual GIF sharing is unchanged.
+
+### Generate the bundled models
+
+From the sibling `cognitodraw_model` project, follow its `Offline Android export`
+instructions. Copy only the encoder, heads, manifest, and license into
+`assets/models/dinov2/`. These generated files are gitignored but are packaged into the
+APK by Flutter. Building a fresh checkout requires generating/copying the bundle first.
+No Python runtime is needed on the Android device.
+
+Build an ARM64 pilot APK without packaging unused native ABIs:
+
+```sh
+flutter pub get
+flutter build apk --release --target-platform android-arm64 --split-per-abi
+```
+
+The APK is `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`. Pilot release
+signing retains the existing debug-signing configuration. iOS/desktop inference is not
+implemented; record collection and export remain separate from Android model inference.
+
+### Verify conversion and native components
+
+Run `flutter analyze` and `flutter test`. These cover assessment controls, error handling,
+migration, invalidation, export, and identical canonical captures across viewport sizes.
+
+The model exporter produces the private `validation` directory. To verify Flutter's
+last-frame decoding against Pillow for all original GIFs, run:
+
+```sh
+COGNITODRAW_REFERENCE_DIR=/absolute/path/to/cognitodraw_model/artifacts/mobile/dinov2/validation flutter test
+```
+
+This private-reference test is explicitly skipped when the environment variable is absent.
+To check every reference
+with compiled Kotlin preprocessing and classifier heads, run from `android/` with a
+supported Gradle JDK (Android Studio's bundled JDK works):
+
+```sh
+./gradlew :app:testDebugUnitTest \
+  -PmobileReferenceDir=/absolute/path/to/cognitodraw_model/artifacts/mobile/dinov2/validation
+```
+
+Without `mobileReferenceDir`, the full private-reference test is explicitly skipped;
+the boundary/error tests still run. Reference drawings are never committed or included
+in the normal app APK. To check the actual Android ONNX engine on a connected emulator
+or device, run:
+
+```sh
+./gradlew :app:connectedDebugAndroidTest \
+  -PmobileReferenceDir=/absolute/path/to/cognitodraw_model/artifacts/mobile/dinov2/validation
+```
+
+The instrumentation test compares all reference pixels, labels, and scores, and logs
+cold/warm assessment times and the maximum observed process PSS under `MobileParity`.
+For an offline smoke test, disable device networking, create both drawing types, assess
+saved records, restart the app, and verify persistence and CSV/ZIP export.

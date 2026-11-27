@@ -78,6 +78,7 @@ flutter:
       - assets/audio/cube_task.mp3
       - assets/images/cube.png
       - assets/images/icon.png
+      - assets/models/dinov2/
 
 
 

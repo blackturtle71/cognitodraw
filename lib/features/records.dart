@@ -5,12 +5,19 @@ import 'package:public_file_saver/public_file_saver.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../data/local_records_repository.dart';
+import '../inference/mobile_inference.dart';
 
 class RecordsPage extends StatefulWidget {
-  const RecordsPage({super.key, this.repository, this.initialRecords});
+  const RecordsPage({
+    super.key,
+    this.repository,
+    this.initialRecords,
+    this.inference,
+  });
 
   final LocalRecordsRepository? repository;
   final List<DrawingRecord>? initialRecords;
+  final DrawingInference? inference;
 
   @override
   State<RecordsPage> createState() => _RecordsPageState();
@@ -20,6 +27,10 @@ class _RecordsPageState extends State<RecordsPage> {
   late final LocalRecordsRepository _repository =
       widget.repository ?? LocalRecordsRepository();
   List<DrawingRecord> _records = [];
+  late final DrawingInference _inference =
+      widget.inference ?? MobileDrawingInference();
+  String? _modelVersion;
+  int? _assessingId;
   bool _loading = true;
   bool _working = false;
   final PublicFileSaver _fileSaver = PublicFileSaver();
@@ -27,12 +38,54 @@ class _RecordsPageState extends State<RecordsPage> {
   @override
   void initState() {
     super.initState();
+    _loadModelInfo();
     final initialRecords = widget.initialRecords;
     if (initialRecords == null) {
       _loadRecords();
     } else {
       _records = initialRecords;
       _loading = false;
+    }
+  }
+
+  Future<void> _loadModelInfo() async {
+    try {
+      final version = await _inference.modelVersion();
+      if (mounted) {
+        setState(() {
+          _modelVersion = version;
+        });
+      }
+    } catch (_) {
+      // Экспорт и просмотр записей доступны даже при недоступной модели.
+    }
+  }
+
+  Future<void> _assessRecord(DrawingRecord record) async {
+    if (_working) return;
+    setState(() {
+      _working = true;
+      _assessingId = record.id;
+    });
+    try {
+      final assessment = await _inference.assess(record);
+      await _repository.saveAssessment(record, assessment);
+      if (!mounted) return;
+      setState(() {
+        _modelVersion = assessment.modelVersion;
+      });
+      await _loadRecords();
+    } catch (error) {
+      if (mounted) {
+        _showMessage('Не удалось оценить рисунок: $error', success: false);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _working = false;
+          _assessingId = null;
+        });
+      }
     }
   }
 
@@ -50,7 +103,7 @@ class _RecordsPageState extends State<RecordsPage> {
       _working = true;
     });
     try {
-      final file = await _repository.exportCsv();
+      final file = await _repository.exportCsv(modelVersion: _modelVersion);
       await SharePlus.instance.share(
         ShareParams(files: [XFile(file.path)], text: 'Cognitodraw CSV'),
       );
@@ -68,7 +121,7 @@ class _RecordsPageState extends State<RecordsPage> {
       _working = true;
     });
     try {
-      final file = await _repository.exportCsv();
+      final file = await _repository.exportCsv(modelVersion: _modelVersion);
       final result = await _fileSaver.saveBytes(
         bytes: await file.readAsBytes(),
         fileName: file.uri.pathSegments.last,
@@ -253,7 +306,7 @@ class _RecordsPageState extends State<RecordsPage> {
             alignment: WrapAlignment.center,
             children: [
               _ExportGroup(
-                label: 'GIF',
+                label: 'Рисунки (GIF и PNG)',
                 children: [
                   FilledButton.icon(
                     onPressed: _working ? null : _shareGifZip,
@@ -303,9 +356,12 @@ class _RecordsPageState extends State<RecordsPage> {
                       final record = _records[index];
                       return _RecordTile(
                         record: record,
-                        onEdit: () => _editRecord(record),
-                        onDelete: () => _deleteRecord(record),
-                        onShareGif: () => _shareGif(record),
+                        onEdit: _working ? null : () => _editRecord(record),
+                        onDelete: _working ? null : () => _deleteRecord(record),
+                        onShareGif: _working ? null : () => _shareGif(record),
+                        onAssess: _working ? null : () => _assessRecord(record),
+                        assessing: _working && _assessingId == record.id,
+                        modelVersion: _modelVersion,
                       );
                     },
                   ),
@@ -349,12 +405,18 @@ class _RecordTile extends StatelessWidget {
     required this.onEdit,
     required this.onDelete,
     required this.onShareGif,
+    required this.onAssess,
+    required this.assessing,
+    required this.modelVersion,
   });
 
   final DrawingRecord record;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
-  final VoidCallback onShareGif;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
+  final VoidCallback? onShareGif;
+  final VoidCallback? onAssess;
+  final bool assessing;
+  final String? modelVersion;
 
   @override
   Widget build(BuildContext context) {
@@ -377,29 +439,60 @@ class _RecordTile extends StatelessWidget {
               ),
               if (record.comment.isNotEmpty)
                 Text('Комментарий: ${record.comment}'),
+              if (record.assessment != null) ...[
+                Text(
+                  record.assessment!.label == 1
+                      ? 'Модель указала на возможные нарушения'
+                      : 'Модель не указала на нарушения',
+                ),
+                Text(
+                  'Оценка модели: ${record.assessment!.score.toStringAsFixed(3)}',
+                ),
+                if (modelVersion == null)
+                  const Text('Версия модели ещё не проверена')
+                else if (record.assessment!.modelVersion != modelVersion)
+                  const Text('Результат устарел. Повторите оценку.'),
+                const Text(
+                  'Экспериментальная оценка, не диагноз. Оценка не является вероятностью заболевания.',
+                ),
+                if (record.taskType == 'clock')
+                  const Text('У модели часов ограниченная точность.'),
+              ],
+              TextButton.icon(
+                onPressed: onAssess,
+                icon:
+                    assessing
+                        ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(),
+                        )
+                        : const Icon(Icons.psychology_outlined),
+                label: Text(assessing ? 'Идёт оценка…' : 'Оценить рисунок'),
+              ),
+              Wrap(
+                spacing: 4,
+                children: [
+                  IconButton(
+                    tooltip: 'Отправить GIF',
+                    onPressed: onShareGif,
+                    icon: const Icon(Icons.ios_share),
+                  ),
+                  IconButton(
+                    tooltip: 'Редактировать',
+                    onPressed: onEdit,
+                    icon: const Icon(Icons.edit),
+                  ),
+                  IconButton(
+                    tooltip: 'Удалить',
+                    onPressed: onDelete,
+                    icon: const Icon(Icons.delete_outline),
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ],
+              ),
             ],
           ),
-        ),
-        trailing: Wrap(
-          spacing: 4,
-          children: [
-            IconButton(
-              tooltip: 'Отправить GIF',
-              onPressed: onShareGif,
-              icon: const Icon(Icons.ios_share),
-            ),
-            IconButton(
-              tooltip: 'Редактировать',
-              onPressed: onEdit,
-              icon: const Icon(Icons.edit),
-            ),
-            IconButton(
-              tooltip: 'Удалить',
-              onPressed: onDelete,
-              icon: const Icon(Icons.delete_outline),
-              color: Theme.of(context).colorScheme.error,
-            ),
-          ],
         ),
       ),
     );

@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../utils/utils.dart';
+import '../inference/assessment.dart';
 
 class DrawingRecord {
   final int? id;
@@ -24,6 +25,9 @@ class DrawingRecord {
   final String comment;
   final String createdAt;
   final String updatedAt;
+  final String? finalImagePath;
+  final String? captureVersion;
+  final DrawingAssessment? assessment;
 
   const DrawingRecord({
     this.id,
@@ -41,6 +45,9 @@ class DrawingRecord {
     required this.comment,
     required this.createdAt,
     required this.updatedAt,
+    this.finalImagePath,
+    this.captureVersion,
+    this.assessment,
   });
 
   DrawingRecord copyWith({
@@ -59,6 +66,9 @@ class DrawingRecord {
     String? comment,
     String? createdAt,
     String? updatedAt,
+    String? finalImagePath,
+    String? captureVersion,
+    DrawingAssessment? assessment,
   }) {
     return DrawingRecord(
       id: id ?? this.id,
@@ -76,6 +86,9 @@ class DrawingRecord {
       comment: comment ?? this.comment,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      finalImagePath: finalImagePath ?? this.finalImagePath,
+      captureVersion: captureVersion ?? this.captureVersion,
+      assessment: assessment ?? this.assessment,
     );
   }
 
@@ -96,6 +109,8 @@ class DrawingRecord {
       'comment': comment,
       'createdAt': createdAt,
       'updatedAt': updatedAt,
+      'finalImagePath': finalImagePath,
+      'captureVersion': captureVersion,
     };
   }
 
@@ -116,6 +131,19 @@ class DrawingRecord {
       comment: map['comment'] as String? ?? '',
       createdAt: map['createdAt'] as String? ?? '',
       updatedAt: map['updatedAt'] as String? ?? '',
+      finalImagePath: map['finalImagePath'] as String?,
+      captureVersion: map['captureVersion'] as String?,
+      assessment:
+          map['modelLabel'] == null
+              ? null
+              : DrawingAssessment.fromMap({
+                'label': map['modelLabel'],
+                'score': map['modelScore'],
+                'modelVersion': map['modelVersion'],
+                'preprocessingVersion': map['modelPreprocessingVersion'],
+                'inputFingerprint': map['modelInputFingerprint'],
+                'assessedAt': map['modelAssessedAt'],
+              }),
     );
   }
 }
@@ -149,7 +177,7 @@ class LocalRecordsRepository {
     _database = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 2,
         onCreate: (db, version) async {
           await db.execute('''
             create table $tableName (
@@ -167,7 +195,9 @@ class LocalRecordsRepository {
               repeatTaps integer,
               comment text not null default '',
               createdAt text not null,
-              updatedAt text not null
+              updatedAt text not null,
+              finalImagePath text,
+              captureVersion text
             )
           ''');
           await db.execute(
@@ -177,6 +207,18 @@ class LocalRecordsRepository {
           await db.execute(
             'create index ${tableName}_created_idx on $tableName(createdAt)',
           );
+          await _createAssessments(db);
+        },
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) {
+            await db.execute(
+              'alter table $tableName add column finalImagePath text',
+            );
+            await db.execute(
+              'alter table $tableName add column captureVersion text',
+            );
+            await _createAssessments(db);
+          }
         },
       ),
     );
@@ -185,8 +227,75 @@ class LocalRecordsRepository {
 
   Future<List<DrawingRecord>> listRecords() async {
     final db = await _db;
-    final rows = await db.query(tableName, orderBy: 'createdAt desc, id desc');
+    final rows = await db.rawQuery('''
+      select a.*, m.label as modelLabel, m.score as modelScore,
+        m.modelVersion, m.preprocessingVersion as modelPreprocessingVersion,
+        m.inputFingerprint as modelInputFingerprint, m.assessedAt as modelAssessedAt
+      from $tableName a left join model_assessments m on m.recordId = a.id
+      order by a.createdAt desc, a.id desc
+    ''');
     return rows.map(DrawingRecord.fromMap).toList();
+  }
+
+  static Future<void> _createAssessments(DatabaseExecutor db) async {
+    await db.execute('''
+      create table model_assessments (
+        recordId integer primary key,
+        label integer not null check(label in (0, 1)),
+        score real not null check(score >= 0 and score <= 1),
+        modelVersion text not null,
+        preprocessingVersion text not null,
+        inputFingerprint text not null,
+        assessedAt text not null
+      )
+    ''');
+  }
+
+  static bool _sameInputs(
+    Map<String, Object?> first,
+    Map<String, Object?> second,
+  ) {
+    const fields = [
+      'age',
+      'sex',
+      'timeToComplete',
+      'repeatTaps',
+      'taskType',
+      'gifPath',
+      'finalImagePath',
+      'captureVersion',
+    ];
+    return fields.every((field) => first[field] == second[field]);
+  }
+
+  Future<void> saveAssessment(
+    DrawingRecord record,
+    DrawingAssessment assessment,
+  ) async {
+    if (record.id == null) throw StateError('Сначала сохраните рисунок');
+    if (![0, 1].contains(assessment.label) ||
+        !assessment.score.isFinite ||
+        assessment.score < 0 ||
+        assessment.score > 1) {
+      throw StateError('Некорректный результат модели');
+    }
+    final db = await _db;
+    await db.transaction((transaction) async {
+      final current = await transaction.query(
+        tableName,
+        where: 'id = ?',
+        whereArgs: [record.id],
+      );
+      if (current.isEmpty || !_sameInputs(current.single, record.toMap())) {
+        throw StateError(
+          'Данные изменились во время оценки. Повторите оценку.',
+        );
+      }
+      await transaction.insert('model_assessments', {
+        'recordId': record.id,
+        ...assessment.toMap(),
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    });
   }
 
   Future<int> recordCount() async {
@@ -199,11 +308,26 @@ class LocalRecordsRepository {
 
   Future<DrawingRecord> saveAttempt(
     List<int> gifBytes,
-    DrawingAttemptSnapshot snapshot,
-  ) async {
+    DrawingAttemptSnapshot snapshot, {
+    List<int>? finalImage,
+    String? captureVersion,
+  }) async {
     final directory = await _ensureGifDirectory();
     final file = File(p.join(directory.path, snapshot.fileName));
     await file.writeAsBytes(gifBytes, flush: true);
+
+    final finalFile =
+        finalImage == null
+            ? null
+            : File(
+              p.join(
+                directory.path,
+                '${p.basenameWithoutExtension(snapshot.fileName)}.png',
+              ),
+            );
+    if (finalFile != null) {
+      await finalFile.writeAsBytes(finalImage!, flush: true);
+    }
 
     final now = DateTime.now().toUtc().toIso8601String();
     final record = DrawingRecord(
@@ -221,6 +345,8 @@ class LocalRecordsRepository {
       comment: '',
       createdAt: snapshot.createdAt.isEmpty ? now : snapshot.createdAt,
       updatedAt: now,
+      finalImagePath: finalFile?.path,
+      captureVersion: captureVersion,
     );
 
     final db = await _db;
@@ -242,12 +368,27 @@ class LocalRecordsRepository {
       updatedAt: DateTime.now().toUtc().toIso8601String(),
     );
     final db = await _db;
-    await db.update(
-      tableName,
-      updated.toMap()..remove('id'),
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await db.transaction((transaction) async {
+      final previous = await transaction.query(
+        tableName,
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      if (previous.isEmpty) throw StateError('Запись удалена');
+      if (!_sameInputs(previous.single, updated.toMap())) {
+        await transaction.delete(
+          'model_assessments',
+          where: 'recordId = ?',
+          whereArgs: [id],
+        );
+      }
+      await transaction.update(
+        tableName,
+        updated.toMap()..remove('id'),
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    });
   }
 
   Future<void> deleteRecord(DrawingRecord record) async {
@@ -262,19 +403,33 @@ class LocalRecordsRepository {
     }
 
     final db = await _db;
-    await db.delete(tableName, where: 'id = ?', whereArgs: [id]);
+    final finalPath = record.finalImagePath;
+    if (finalPath != null && await File(finalPath).exists()) {
+      await File(finalPath).delete();
+    }
+    await db.transaction((transaction) async {
+      await transaction.delete(
+        'model_assessments',
+        where: 'recordId = ?',
+        whereArgs: [id],
+      );
+      await transaction.delete(tableName, where: 'id = ?', whereArgs: [id]);
+    });
   }
 
-  Future<File> exportCsv() async {
+  Future<File> exportCsv({String? modelVersion}) async {
     final directory = await _ensureExportDirectory();
     final file = File(p.join(directory.path, '${_timestampedName('csv')}.csv'));
-    await file.writeAsBytes(await exportCsvBytes(), flush: true);
+    await file.writeAsBytes(
+      await exportCsvBytes(modelVersion: modelVersion),
+      flush: true,
+    );
     return file;
   }
 
-  Future<List<int>> exportCsvBytes() async {
+  Future<List<int>> exportCsvBytes({String? modelVersion}) async {
     final records = await listRecords();
-    return utf8.encode(_recordsToCsv(records));
+    return utf8.encode(_recordsToCsv(records, modelVersion));
   }
 
   Future<File?> exportGifZip() async {
@@ -285,18 +440,27 @@ class LocalRecordsRepository {
     for (var index = 0; index < records.length; index += 1) {
       final record = records[index];
       final file = File(record.gifPath);
-      if (!await file.exists()) {
-        continue;
+      if (await file.exists()) {
+        final bytes = await file.readAsBytes();
+        final entryName = _uniqueArchiveName(
+          usedNames: usedNames,
+          preferredName: record.fileName,
+          fallbackIndex: index,
+          recordId: record.id,
+        );
+        archive.addFile(ArchiveFile(entryName, bytes.length, bytes));
       }
-
-      final bytes = await file.readAsBytes();
-      final entryName = _uniqueArchiveName(
-        usedNames: usedNames,
-        preferredName: record.fileName,
-        fallbackIndex: index,
-        recordId: record.id,
-      );
-      archive.addFile(ArchiveFile(entryName, bytes.length, bytes));
+      final finalPath = record.finalImagePath;
+      if (finalPath != null && await File(finalPath).exists()) {
+        final png = await File(finalPath).readAsBytes();
+        final pngName = _uniqueArchiveName(
+          usedNames: usedNames,
+          preferredName: p.basename(finalPath),
+          fallbackIndex: index,
+          recordId: record.id,
+        );
+        archive.addFile(ArchiveFile(pngName, png.length, png));
+      }
     }
 
     if (archive.files.isEmpty) {
@@ -350,7 +514,7 @@ class LocalRecordsRepository {
     return directory;
   }
 
-  String _recordsToCsv(List<DrawingRecord> records) {
+  String _recordsToCsv(List<DrawingRecord> records, String? modelVersion) {
     const headers = [
       'id',
       'fullName',
@@ -367,6 +531,15 @@ class LocalRecordsRepository {
       'comment',
       'createdAt',
       'updatedAt',
+      'finalImageFileName',
+      'captureVersion',
+      'modelLabel',
+      'modelScore',
+      'modelVersion',
+      'modelPreprocessingVersion',
+      'modelInputFingerprint',
+      'modelAssessedAt',
+      'modelAssessmentStatus',
     ];
     final rows = <List<Object?>>[
       headers,
@@ -387,6 +560,23 @@ class LocalRecordsRepository {
           record.comment,
           record.createdAt,
           record.updatedAt,
+          record.finalImagePath == null
+              ? ''
+              : p.basename(record.finalImagePath!),
+          record.captureVersion,
+          record.assessment?.label,
+          record.assessment?.score,
+          record.assessment?.modelVersion,
+          record.assessment?.preprocessingVersion,
+          record.assessment?.inputFingerprint,
+          record.assessment?.assessedAt,
+          record.assessment == null
+              ? 'not_assessed'
+              : modelVersion == null
+              ? 'unverified'
+              : record.assessment!.modelVersion == modelVersion
+              ? 'current'
+              : 'outdated',
         ],
       ),
     ];
