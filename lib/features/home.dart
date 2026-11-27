@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../constants/text_constants.dart';
+import '../data/local_records_repository.dart';
 import '../utils/utils.dart';
 
 class HomePage extends StatefulWidget {
@@ -13,21 +14,14 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int _sessionVersion = 0;
-  int _uploadVersion = 0;
   int _statusVersion = 0;
 
-  Future<void> _resetParticipantSession({required bool deletePending}) async {
-    if (deletePending) {
-      final paths = await StorageUtils.checkDownloadsDir();
-      await StorageUtils.deletePendingFiles(paths);
-    }
-
+  Future<void> _resetParticipantSession() async {
     await StorageUtils.startParticipantSession();
 
     if (!mounted) return;
     setState(() {
       _sessionVersion += 1;
-      _uploadVersion += 1;
       _statusVersion += 1;
     });
 
@@ -79,7 +73,7 @@ class _HomePageState extends State<HomePage> {
         ),
         const SizedBox(height: 10),
         SessionStatusCard(
-          key: ValueKey('status-$_statusVersion-$_uploadVersion'),
+          key: ValueKey('status-$_statusVersion'),
           titleStyle: titleStyle,
           descriptionStyle: descriptionStyle,
         ),
@@ -96,12 +90,6 @@ class _HomePageState extends State<HomePage> {
           descriptionStyle: descriptionStyle,
           onSaved: _refreshStatus,
         ),
-        const SizedBox(height: 10),
-        UploadCard(
-          key: ValueKey(_uploadVersion),
-          titleStyle: titleStyle,
-          onUploaded: _refreshUploadStatus,
-        ),
       ],
     );
   }
@@ -109,13 +97,6 @@ class _HomePageState extends State<HomePage> {
   void _refreshStatus() {
     setState(() {
       _statusVersion += 1;
-    });
-  }
-
-  void _refreshUploadStatus() {
-    setState(() {
-      _statusVersion += 1;
-      _uploadVersion += 1;
     });
   }
 }
@@ -135,9 +116,10 @@ class SessionStatusCard extends StatefulWidget {
 }
 
 class _SessionStatusCardState extends State<SessionStatusCard> {
+  final LocalRecordsRepository _repository = LocalRecordsRepository();
   ParticipantMetadata? metadata;
   String? sessionId;
-  int pendingCount = 0;
+  int recordsCount = 0;
   Map<String, String> taskStatuses = const {
     'clock': 'notStarted',
     'cube': 'notStarted',
@@ -154,16 +136,24 @@ class _SessionStatusCardState extends State<SessionStatusCard> {
     final loadedSessionId = await StorageUtils.loadString(
       StorageKeys.sessionId,
     );
-    final pendingPaths = await StorageUtils.checkDownloadsDir();
+    final loadedRecordsCount = await _loadRecordsCount();
     final loadedTaskStatuses = await StorageUtils.loadTaskStatuses();
 
     if (!mounted) return;
     setState(() {
       metadata = loadedMetadata;
       sessionId = loadedSessionId;
-      pendingCount = pendingPaths.length;
+      recordsCount = loadedRecordsCount;
       taskStatuses = loadedTaskStatuses;
     });
+  }
+
+  Future<int> _loadRecordsCount() async {
+    try {
+      return await _repository.recordCount();
+    } on Object {
+      return 0;
+    }
   }
 
   @override
@@ -196,8 +186,8 @@ class _SessionStatusCardState extends State<SessionStatusCard> {
               ),
               _StatusLine(label: 'Сессия', value: sessionId ?? 'не начата'),
               _StatusLine(
-                label: 'Ожидают загрузки',
-                value: pendingCount.toString(),
+                label: 'Сохранено записей',
+                value: recordsCount.toString(),
               ),
               const SizedBox(height: 8),
               _StatusLine(
@@ -256,10 +246,8 @@ String _sexLabel(String? sex) {
 
 String _taskStatusLabel(String? status) {
   switch (status) {
-    case 'uploaded':
-      return 'загружено';
-    case 'pendingUpload':
-      return 'ожидает ручной загрузки';
+    case 'saved':
+      return 'сохранено на устройстве';
     case 'failed':
       return 'ошибка сохранения';
     default:
@@ -277,7 +265,7 @@ class NewSessionCard extends StatefulWidget {
 
   final TextStyle titleStyle;
   final TextStyle descriptionStyle;
-  final Future<void> Function({required bool deletePending}) onReset;
+  final Future<void> Function() onReset;
 
   @override
   State<NewSessionCard> createState() => _NewSessionCardState();
@@ -287,57 +275,11 @@ class _NewSessionCardState extends State<NewSessionCard> {
   bool _resetting = false;
 
   Future<void> _startNewSession() async {
-    final pendingPaths = await StorageUtils.checkDownloadsDir();
-    if (!mounted) return;
-
-    bool deletePending = false;
-
-    if (pendingPaths.isNotEmpty) {
-      final action = await showDialog<_PendingFileAction>(
-        context: context,
-        builder:
-            (context) => AlertDialog(
-              title: const Text('Есть несохранённые GIF-файлы'),
-              content: Text(
-                'Найдено локальных файлов: ${pendingPaths.length}. '
-                'Можно начать новую сессию и оставить их для ручной загрузки '
-                'или удалить их перед началом.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Отмена'),
-                ),
-                TextButton(
-                  onPressed:
-                      () =>
-                          Navigator.pop(context, _PendingFileAction.keepFiles),
-                  child: const Text('Оставить файлы'),
-                ),
-                FilledButton(
-                  onPressed:
-                      () => Navigator.pop(
-                        context,
-                        _PendingFileAction.deleteFiles,
-                      ),
-                  child: const Text('Удалить файлы'),
-                ),
-              ],
-            ),
-      );
-
-      if (action == null) {
-        return;
-      }
-
-      deletePending = action == _PendingFileAction.deleteFiles;
-    }
-
     setState(() {
       _resetting = true;
     });
 
-    await widget.onReset(deletePending: deletePending);
+    await widget.onReset();
 
     if (!mounted) return;
     setState(() {
@@ -380,155 +322,6 @@ class _NewSessionCardState extends State<NewSessionCard> {
                         : const Icon(Icons.person_add_alt_1),
                 label: const Text('НАЧАТЬ НОВУЮ СЕССИЮ'),
               ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-enum _PendingFileAction { keepFiles, deleteFiles }
-
-class UploadCard extends StatefulWidget {
-  final TextStyle titleStyle;
-  final VoidCallback onUploaded;
-  const UploadCard({
-    super.key,
-    required this.titleStyle,
-    required this.onUploaded,
-  });
-
-  @override
-  State<UploadCard> createState() => _UploadCardState();
-}
-
-class _UploadCardState extends State<UploadCard> {
-  List<String> paths = [];
-  List<PendingUploadInfo> pendingInfos = [];
-  bool _uploaded = false;
-  bool _uploading = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadPaths();
-  }
-
-  Future<void> _loadPaths() async {
-    final result = await StorageUtils.checkDownloadsDir();
-    final infos = await StorageUtils.loadPendingUploadInfo(result);
-    if (!mounted) return;
-    setState(() {
-      paths = result;
-      pendingInfos = infos;
-    });
-  }
-
-  void _showUploadStatus() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Center(
-          child: Text(
-            _uploaded
-                ? 'Файлы успешно сохранены'
-                : 'Ошибка соединения с сервером',
-          ),
-        ),
-        backgroundColor: _uploaded ? Colors.green : Colors.red,
-      ),
-    );
-  }
-
-  Future<void> _uploadPendingFiles() async {
-    if (!mounted) return;
-
-    setState(() {
-      _uploading = true;
-      _uploaded = false;
-    });
-
-    bool allSuccess = true;
-
-    for (var path in paths) {
-      try {
-        final success = await StorageUtils.uploadPendingGif(path);
-        if (!success) {
-          allSuccess = false;
-        }
-      } catch (_) {
-        allSuccess = false;
-      }
-    }
-
-    if (!mounted) return;
-
-    setState(() {
-      _uploading = false;
-      _uploaded = allSuccess;
-    });
-    await _loadPaths();
-    widget.onUploaded();
-    _showUploadStatus();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.all(8),
-      child: ListTile(
-        title: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Text(
-            'Загрузить данные вручную',
-            style: widget.titleStyle,
-            textAlign: TextAlign.center,
-          ),
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              if (_uploading)
-                const Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Padding(
-                      padding: EdgeInsets.only(bottom: 16),
-                      child: CircularProgressIndicator(),
-                    ),
-                    Text(
-                      'Идёт процесс сохранения. Не закрывайте приложение и не покидайте страницу!',
-                      textAlign: TextAlign.justify,
-                    ),
-                  ],
-                )
-              else ...[
-                Text(
-                  paths.isEmpty
-                      ? 'Нет локальных GIF-файлов для загрузки.'
-                      : 'Локальных GIF-файлов: ${paths.length}',
-                ),
-                if (pendingInfos.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  ...pendingInfos.take(3).map((info) {
-                    return Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        info.hasSidecar
-                            ? info.displayTitle
-                            : '${info.fileName} - legacy',
-                      ),
-                    );
-                  }),
-                ],
-                const SizedBox(height: 12),
-                ElevatedButton(
-                  onPressed: paths.isEmpty ? null : _uploadPendingFiles,
-                  child: const Text('Загрузить'),
-                ),
-              ],
             ],
           ),
         ),
